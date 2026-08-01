@@ -1,53 +1,74 @@
 # OTS — Optical Transfer Stream
 
+[![CI](https://github.com/Bolt3z/ots-optical-transfer/actions/workflows/ci.yml/badge.svg)](https://github.com/Bolt3z/ots-optical-transfer/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Trasferisce file fra due dispositivi con la sola luce: uno schermo mostra una sequenza di
 codici QR, una camera li guarda. Nessuna rete, nessun cavo, nessun account, nessun server.
 
-`dist/ots.html` è un **unico file** che contiene tutto. Aprilo e funziona, anche con il
-Wi-Fi staccato.
+`dist/ots.html` è un **unico file** che contiene tutto — protocollo, encoder QR, decoder,
+interfaccia. Aprilo e funziona, anche con il Wi-Fi staccato.
+
+**Provalo subito:** <https://bolt3z.github.io/ots-optical-transfer/>
 
 ## Provalo in un minuto
 
-1. Apri `dist/ots.html` sul PC → scheda **Invia** → scegli un file → Avvia trasmissione.
-2. Apri lo stesso file sul telefono o su un secondo PC → scheda **Ricevi** → Usa la camera.
-3. Inquadra lo schermo da 30–50 cm. Quando arriva al 100% scarica il file.
+1. Apri la pagina sul PC → scheda **Invia** → scegli un file → *Avvia trasmissione*.
+2. Apri la stessa pagina sul telefono → scheda **Ricevi** → *Usa la camera*.
+3. Inquadra lo schermo da 30–50 cm. Al 100% scarica il file.
 
-Luminosità dello schermo al massimo. Se la lettura è incerta, abbassa la versione QR o gli fps.
+Luminosità dello schermo al massimo. Se la lettura è incerta, abbassa la versione QR o gli
+fps: un codice più piccolo e più lento passa dove uno denso non ce la fa.
+
+Il ricevitore dice cosa non va invece di restare muto: distingue «non vedo nessun codice» da
+«leggo sempre lo stesso, il trasmettitore è fermo», e mostra quale motore di decodifica sta
+usando e quanti ms costa ogni tentativo.
 
 ## Su iPhone
 
 Safari **non concede la camera a una pagina aperta da file locale**. Tre strade:
 
-1. **Registra un video** dello schermo trasmittente con l'app Fotocamera, poi caricalo nel
-   campo «da un video registrato». Funziona identico e spesso decodifica più in fretta del
-   tempo reale. È il percorso consigliato.
-2. **Usa l'iPhone come trasmettitore**: mostrare i QR non richiede alcun permesso.
-3. **Servi la pagina in HTTPS** (anche da GitHub Pages): allora la camera funziona. Una volta
-   caricata, la pagina non usa più la rete.
+1. **Apri la pagina da GitHub Pages** (il link sopra): è HTTPS, quindi la camera funziona.
+   Una volta caricata, la pagina non usa più la rete — puoi mettere il telefono in modalità
+   aereo e continuare. È la strada consigliata.
+2. **Registra un video** dello schermo trasmittente con l'app Fotocamera, poi caricalo nel
+   campo «da un video registrato». Funziona anche da file locale, e spesso decodifica più in
+   fretta del tempo reale.
+3. **Usa l'iPhone come trasmettitore**: mostrare i QR non richiede alcun permesso.
 
 Su Android Chrome la camera funziona anche da `file://`.
 
-## Sviluppo
+## Su PC, senza rete
 
-```
-src/core.mjs       protocollo: PRNG, fontana LT, Base45, framing, manifest — nessun DOM
-src/qrencode.mjs   encoder QR alfanumerico, ECC L, versioni 1–40
-src/app.mjs        interfaccia: canvas, camera, file
-src/index.html     struttura e stile
-vendor/jsQR.min.js decoder QR (Apache 2.0)
-build.mjs          assembla dist/ots.html
-test/              test in Node
-```
+Scarica `dist/ots.html` e aprilo con un doppio clic: funziona da `file://`, camera compresa
+(verificato su Chrome). Se preferisci servirlo in locale, con Python non serve installare
+niente:
 
 ```bash
-node build.mjs           # ricostruisce dist/ots.html
-cd test && node core.test.mjs && node e2e.test.mjs
+python3 -m http.server 8000 --directory dist
+# poi apri http://localhost:8000/ots.html
 ```
 
-Leggi `SPEC.md` prima di modificare il protocollo, e `BIBBIA-trasferimento-offline.md`
-per capire perché è fatto così.
+## Come funziona
 
-## Prestazioni attese
+Il canale ottico perde frame in continuazione: un riflesso, una mano che trema, la camera che
+rifà il fuoco. Chiedere la ritrasmissione richiederebbe un canale di ritorno, che non c'è.
+Quindi il trasmettitore non manda i pezzi del file: manda **combinazioni XOR** di pezzi,
+scelte da un codice fontana (LT, Luby Transform). Il ricevitore ne raccoglie un po' più di
+quanti servano, in qualunque ordine, e ricostruisce tutto. Nessuna ritrasmissione, nessuna
+sincronizzazione, nessun canale di ritorno.
+
+Encoder e decoder ricavano quali pezzi sono stati combinati dal solo indice del simbolo,
+tramite un PRNG concordato: la lista non viaggia mai sul canale.
+
+```
+file → source block da 4 MB → gzip → codice fontana LT → frame + CRC32 → Base45 → QR
+```
+
+Formato dei frame e parti normative: [`SPEC.md`](SPEC.md).
+Il perché delle scelte: [`BIBBIA-trasferimento-offline.md`](BIBBIA-trasferimento-offline.md).
+
+## Prestazioni
 
 | Configurazione | Velocità utile |
 |---|---|
@@ -55,9 +76,69 @@ per capire perché è fatto così.
 | Webcam 1080p, QR v25 @12 fps | 12–25 kB/s |
 | Telefono 4K, QR v25 @12 fps | 40–60 kB/s |
 
-Un file da 10 MB richiede fra 3 e 25 minuti secondo l'hardware. Sopra i 200 MB serve prima
-il lavoro descritto in `SPEC.md` §3 P2.
+Un file da 10 MB richiede fra 3 e 25 minuti secondo l'hardware. Sopra i 200 MB serve prima il
+lavoro descritto in [`SPEC.md`](SPEC.md) §3.
+
+Overhead del codice fontana, misurato: **1.09–1.18×** per K ≥ 512, e **1.00×** per K ≤ 64,
+dove il trasmettitore sceglie ESI sistematici invece di affidarsi alla fontana pura (che a
+K = 2 arrivava a 3.5× nel caso peggiore).
+
+Nel ricevitore la decodifica QR costa circa 40 ms per frame a 800×600 e la lettura dei pixel
+2 ms: tutto il tempo è in jsQR. Per questo la decodifica sta in un paio di Web Worker e il
+thread principale si limita a leggere i pixel, mentre
+[`requestVideoFrameCallback`](https://developer.mozilla.org/docs/Web/API/HTMLVideoElement/requestVideoFrameCallback)
+fa in modo che ogni frame si decodifichi una volta sola invece di tre.
+
+## Sviluppo
+
+```
+src/core.mjs       protocollo: PRNG, fontana LT, Base45, framing, manifest — nessun DOM
+src/qrencode.mjs   encoder QR alfanumerico, ECC L, versioni 1–40
+src/scanner.mjs    da <video> a testi QR: pool di worker, ritaglio della regione utile
+src/app.mjs        interfaccia: canvas, camera, file
+src/index.html     struttura e stile
+vendor/jsQR.min.js decoder QR (Apache 2.0)
+build.mjs          assembla dist/ots.html
+python/            implementazione di riferimento del protocollo
+test/              test in Node e in Chrome
+```
+
+```bash
+npm install                    # solo per i test in browser (puppeteer-core)
+npm run build                  # ricostruisce dist/ots.html
+npm test                       # protocollo + catena completa (~4 min)
+npm run test:browser           # canvas, camera finta, worker, download in Chrome vero
+```
+
+`test/browser.test.mjs` usa il Chrome già installato (`CHROME_PATH` per indicarne un altro).
+Costruisce un video YUV4MPEG2 con i QR che il trasmettitore ha **davvero** disegnato e lo
+passa a Chrome come camera finta: `getUserMedia`, il video element, lo scanner, i worker e il
+download girano per davvero, e il file ricevuto viene confrontato byte per byte. Prova anche
+il ripiego senza worker; con `ffmpeg` presente aggiunge il percorso «da video registrato»,
+quello che si usa su iPhone.
+
+### Regole da non violare
+
+- **Un solo file, nessuna rete.** `dist/ots.html` deve restare apribile da `file://` con la
+  rete staccata. Niente CDN, niente font remoti, niente `fetch`. Il test in browser lo
+  verifica: qualunque richiesta di rete lo fa fallire.
+- **`core.mjs` non deve conoscere il DOM.** È il modulo che verrà portato su altre
+  piattaforme: se ci entra `document`, il porting diventa una riscrittura.
+- **Non cambiare il formato del frame senza alzare `VERSION`.**
+- **Testare con dati casuali incomprimibili.** Il testo ripetitivo si comprime così tanto che
+  K diventa 1 e il codice fontana non viene mai esercitato davvero.
+- `dist/ots.html` è versionato e la CI verifica che corrisponda ai sorgenti: chi lo scarica
+  deve usare esattamente la versione provata.
+
+## Sicurezza
+
+Il file ricevuto arriva da un canale non autenticato: **chiunque può mostrare un QR**. Il
+digest nel manifest prova che il flusso è arrivato integro, non che venga da chi credi. Non
+c'è cifratura: chi riprende lo schermo legge il contenuto. Il manifest viene validato con
+limiti espliciti prima di allocare qualunque cosa, ma il file scaricato va trattato come non
+fidato — controllalo prima di aprirlo.
 
 ## Licenza
 
-Codice di esempio, usalo come vuoi. `vendor/jsQR.min.js` è Apache 2.0 di Cosmo Wolfe.
+MIT, vedi [`LICENSE`](LICENSE). Include jsQR di Cosmo Wolfe, Apache 2.0: vedi
+[`NOTICE`](NOTICE) e [`vendor/jsQR.LICENSE`](vendor/jsQR.LICENSE).

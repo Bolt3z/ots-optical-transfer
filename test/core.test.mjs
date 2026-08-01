@@ -37,6 +37,52 @@ console.log('framing: ok (incluso padding in coda e rilevamento corruzione)');
 }
 console.log('manifest: ok');
 
+// --- manifest: limiti difensivi (input non fidato, chiunque puo' mostrare un QR)
+{
+  const good={origLen:1000, sha256:rndBytes(32), symbolSize:600, flags:0,
+              sbRawSize:4194304, name:'x', compressedLens:[1000]};
+  const throws=(b,m)=>{let t=false;try{unpackManifest(b);}catch{t=true;}check(t,m);};
+  throws(packManifest(good).subarray(0,40), 'manifest troncato sotto 51 byte');
+  throws(packManifest(good).subarray(0,53), 'array compressedLens troncato');
+  {const b=packManifest(good); new DataView(b.buffer).setUint16(40,4); throws(b,'symbolSize troppo piccolo');}
+  {const b=packManifest(good); new DataView(b.buffer).setUint16(40,8192); throws(b,'symbolSize troppo grande');}
+  {const b=packManifest(good); new DataView(b.buffer).setUint16(42,0); throws(b,'nSourceBlocks a zero');}
+  {const b=packManifest(good); new DataView(b.buffer).setUint32(45,0); throws(b,'sbRawSize a zero');}
+  {const b=packManifest(good); new DataView(b.buffer).setFloat64(0,-1); throws(b,'origLen negativo');}
+  {const b=packManifest(good); new DataView(b.buffer).setFloat64(0,1.5); throws(b,'origLen non intero');}
+  {const b=packManifest(good);
+   new DataView(b.buffer).setUint32(b.length-4, 0x7FFFFFFF); throws(b,'compressedLen enorme');}
+  // un manifest valido non deve inciampare nei controlli
+  {let ok=true;try{unpackManifest(packManifest(good));}catch{ok=false;}check(ok,'manifest valido accettato');}
+  // nome vuoto e file vuoto sono legittimi
+  {let ok=true;try{unpackManifest(packManifest({...good,name:'',origLen:0,compressedLens:[0]}));}
+   catch{ok=false;}check(ok,'manifest di file vuoto accettato');}
+}
+console.log('manifest: limiti difensivi ok');
+
+// --- piano sistematico per K piccolo: su canale pulito bastano K simboli
+{
+  for(const [bytes,ss] of [[1200,600],[3000,600],[12000,600],[38400,600]]){
+    const data=rndBytes(bytes), seed=(Math.random()*2**31)|0;
+    const enc=new LTEncoder(data,ss,seed);
+    check(enc.plan!==null, `piano sistematico trovato per K=${enc.K}`);
+    const dec=new LTDecoder(enc.K,ss,enc.dataLen,seed);
+    let n=0;
+    while(!dec.complete && n<enc.K*40+1000){ const esi=enc.nextEsi(); dec.addSymbol(esi,enc.symbol(esi)); n++; }
+    const out=dec.result();
+    check(dec.complete && out && data.every((v,i)=>v===out[i]), `piano K=${enc.K} decodifica`);
+    check(n===enc.K, `piano K=${enc.K}: attesi ${enc.K} simboli, usati ${n}`);
+    console.log(`sistematico: K=${enc.K} overhead=${(n/enc.K).toFixed(3)}x`);
+  }
+  // oltre la soglia il piano non si costruisce: si resta fontana pura
+  {const enc=new LTEncoder(rndBytes(600*200),600,1);
+   check(enc.plan===null, `nessun piano per K=${enc.K} (sopra la soglia)`);}
+  // dopo il piano la fontana continua senza ripetere gli ESI gia' usati
+  {const enc=new LTEncoder(rndBytes(3000),600,7);
+   const used=new Set(); for(let i=0;i<enc.K*3;i++) used.add(enc.nextEsi());
+   check(used.size===enc.K*3, 'nessun ESI ripetuto dopo il piano');}
+}
+
 // --- fountain
 function trial(bytes, symbolSize, loss){
   const data=rndBytes(bytes), seed=(Math.random()*2**31)|0;

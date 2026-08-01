@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm install --no-audit --no-fund
+
+      - name: Costruisci il bundle
+        run: node build.mjs
+
+      # dist/ots.html e' il prodotto e sta nel repo: se non corrisponde ai
+      # sorgenti, chi lo scarica usa una versione diversa da quella provata.
+      - name: dist/ots.html corrisponde ai sorgenti
+        run: git diff --exit-code -- dist/ots.html
+
+      - name: Test del protocollo
+        run: node test/core.test.mjs
+
+      - name: Test della catena completa
+        run: node test/e2e.test.mjs
+
+      - name: Test in browser reale (canvas, camera finta, worker)
+        run: node test/browser.test.mjs
+        env:
+          CHROME_PATH: /usr/bin/google-chrome

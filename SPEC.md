@@ -1,7 +1,7 @@
 # OTS — Specifica di consegna
 
 Documento per chi continua lo sviluppo (umano o Claude Code).
-Riferimento concettuale: `BIBBIA-trasferimento-offline.md` nella cartella superiore.
+Riferimento concettuale: `BIBBIA-trasferimento-offline.md`.
 
 ---
 
@@ -10,29 +10,38 @@ Riferimento concettuale: `BIBBIA-trasferimento-offline.md` nella cartella superi
 | Componente | File | Stato |
 |---|---|---|
 | PRNG normativo SplitMix32 | `src/core.mjs` | ✅ verificato identico all'implementazione Python |
-| Codice fontana LT | `src/core.mjs` | ✅ overhead 1.16–1.20× per K ≥ 512 |
+| Codice fontana LT | `src/core.mjs` | ✅ overhead 1.09–1.18× per K ≥ 512 |
+| Piano sistematico per K ≤ 64 | `src/core.mjs` | ✅ overhead 1.000× per K = 2, 5, 20, 64 |
 | Base45 (RFC 9285) | `src/core.mjs` | ✅ roundtrip su lunghezze 0–199 |
 | Framing + CRC32 | `src/core.mjs` | ✅ tollera padding in coda, rileva corruzione |
-| Manifest + source block | `src/core.mjs` | ✅ roundtrip |
+| Manifest + source block | `src/core.mjs` | ✅ roundtrip; 10 casi di input malformato respinti |
 | Encoder QR (alfanumerico, ECC L, v1–40) | `src/qrencode.mjs` | ✅ 80/80 letti da ZBar; 66/80 bit-identici a `segno` |
 | Decoder QR | `vendor/jsQR.min.js` | ✅ 9/9 versioni sui codici prodotti dal nostro encoder |
-| Trasmettitore (UI, canvas, loop) | `src/app.mjs` | ⚠️ mai eseguito in un browser reale |
-| Ricevitore camera (`getUserMedia`) | `src/app.mjs` | ⚠️ mai eseguito in un browser reale |
-| Ricevitore da video registrato | `src/app.mjs` | ⚠️ mai eseguito in un browser reale |
+| Trasmettitore (UI, canvas, loop) | `src/app.mjs` | ✅ canvas rileggibile da un decoder QR, zero richieste di rete |
+| Ricevitore camera (`getUserMedia`) | `src/app.mjs`, `src/scanner.mjs` | ✅ camera finta Y4M in Chrome: file ricevuto byte-identico |
+| Ricevitore da video registrato | `src/app.mjs` | ✅ mp4 H.264 in Chrome: file ricevuto byte-identico |
+| Decodifica in Web Worker + ROI | `src/scanner.mjs` | ✅ provata sia con worker sia col ripiego su thread principale |
 | Catena completa protocollo | `test/e2e.test.mjs` | ✅ 4 scenari, incl. 3 source block e 35% di perdita |
 
-**Da leggere con attenzione:** tutta la logica di protocollo è testata a fondo; tutto lo strato
-DOM/camera è stato scritto ma **mai eseguito**, perché l'ambiente di sviluppo non aveva un
-browser. La prima cosa da fare è aprire `dist/ots.html` e correggere ciò che si rompe.
+Lo strato DOM/camera, che nella consegna precedente non era **mai stato eseguito**, ora è
+provato in un Chrome vero da `test/browser.test.mjs`: il trasmettitore disegna, i suoi QR
+diventano un video YUV4MPEG2 passato a Chrome come camera finta, e il file che esce dal
+download viene confrontato byte per byte con l'originale.
+
+**Resta non verificato su hardware reale:** una camera fisica che mette a fuoco e regola
+l'esposizione da sola, Safari su iPhone, e `applyConstraints` per bloccare fuoco ed
+esposizione (il codice applica solo ciò che il dispositivo dichiara di supportare, ma nessun
+dispositivo vero l'ha ancora confermato).
 
 ### Test
 
 ```bash
-node build.mjs                    # assembla dist/ots.html
-cd test
-node core.test.mjs                # fountain, base45, framing, manifest
-node e2e.test.mjs                 # catena completa sul bundle costruito (~4 min)
-node qr-sweep.mjs                 # genera QR di tutte e 40 le versioni
+npm install                       # puppeteer-core, solo per i test in browser
+npm run build                     # assembla dist/ots.html
+node test/core.test.mjs           # fontana, piano sistematico, base45, framing, manifest
+node test/e2e.test.mjs            # catena completa sul bundle costruito (~4 min)
+node test/browser.test.mjs        # canvas, camera finta, worker, download in Chrome vero
+node test/qr-sweep.mjs            # genera QR di tutte e 40 le versioni
 ```
 
 ---
@@ -122,43 +131,53 @@ lati deve mai tenere il file completo in memoria.
 
 ## 3. Priorità di lavoro
 
-### P0 — Farlo funzionare davvero (prima cosa)
-1. Aprire `dist/ots.html` in Chrome desktop, provare invio e ricezione con webcam.
-2. Correggere gli errori dello strato DOM. Punti sospetti: dimensione del canvas rispetto
-   al `devicePixelRatio`, `video.play()` che richiede un gesto dell'utente, `getImageData`
-   su canvas grandi (lento).
-3. Verificare che `CompressionStream('gzip')` sia presente; in caso contrario disattivare
-   la compressione con un fallback pulito.
-4. Provare su Android Chrome e su iPhone (percorso «da video registrato»).
+### Fatto (era P0 e P1)
+- ✅ Provato in Chrome desktop, invio e ricezione, con test automatico ripetibile.
+- ✅ Ripiego pulito quando `CompressionStream` manca: la compressione si disattiva da sola,
+  e un ricevitore senza `DecompressionStream` lo dice invece di fallire in silenzio.
+- ✅ Decodifica in Web Worker. Contrariamente all'ipotesi iniziale, il costo non era
+  `getImageData` (1,6 ms) ma `jsQR` (39,7 ms a 800×600): i pixel si leggono sul thread
+  principale e al worker si trasferisce solo il buffer. Due worker, perché con uno la
+  latenza dello scambio di messaggi non si nasconde.
+- ✅ Ritaglio della regione d'interesse dopo il primo aggancio, con ritorno a inquadratura
+  piena dopo 8 tentativi a vuoto.
+- ✅ `requestVideoFrameCallback` dove c'è: un frame, un tentativo. Prima, con
+  `requestAnimationFrame`, lo stesso frame si decodificava due o tre volte — 106 tentativi
+  invece di 44 per lo stesso file.
+- ✅ `applyConstraints` per bloccare fuoco, esposizione e bilanciamento del bianco dopo il
+  primo aggancio, solo per ciò che il dispositivo dichiara. **Da confermare su un telefono.**
+- ✅ Piano sistematico per K ≤ 64: overhead 1.000× invece di 1.6–1.9×.
+- ✅ `unpackManifest`: limiti su `compressedLens`, `sbRawSize`, lunghezza del buffer, e
+  controlli **prima** di allocare.
+- ✅ Il ricevitore distingue «non vedo nessun codice» da «trasmettitore fermo».
+- ✅ `TX.prepare` non comprime più due volte: la decisione su gzip si prende sul primo
+  source block e vale per tutti, perché il formato ha un solo bit di flag.
 
-### P1 — Prestazioni del ricevitore
-5. Spostare la decodifica in un **Web Worker**: adesso `jsQR` gira sul thread principale e
-   a 1080p costa 15–30 ms per frame, che compete con il rendering.
-6. Ritagliare la regione d'interesse dopo il primo aggancio (dimezza il tempo di decodifica).
-7. Bloccare esposizione e bilanciamento del bianco via `MediaStreamTrack.applyConstraints`
-   dove supportato.
-8. Valutare `zxing-wasm` al posto di jsQR: è più robusto sui codici densi.
+### P1 — Quel che resta del ricevitore
+1. Provare su hardware vero: Android Chrome, Safari su iPhone via HTTPS, e verificare che
+   `applyConstraints` faccia davvero qualcosa.
+2. Valutare `zxing-wasm` al posto di jsQR: è più robusto sui codici densi, ed essendo il
+   collo di bottiglia (40 ms su 42) è lì che si guadagna.
 
 ### P2 — File grandi
-9. **Il ricevitore tiene tutti i blocchi in RAM.** Oltre ~100 MB il tab muore. Passare alla
+3. **Il ricevitore tiene tutti i blocchi in RAM.** Oltre ~100 MB il tab muore. Passare alla
    File System Access API (`showSaveFilePicker` + `createWritable`) per scrivere ogni
    source block su disco appena si completa; ripiegare su IndexedDB dove non c'è.
-10. Ripresa fra sessioni: salvare i blocchi completati e riprendere.
-11. Derivare il `SESSION_ID` dal digest del file invece che a caso: due trasmissioni dello
-    stesso file generano lo stesso flusso, quindi le ricezioni parziali si sommano.
+4. Ripresa fra sessioni: salvare i blocchi completati e riprendere.
+5. Derivare il `SESSION_ID` dal digest del file invece che a caso: due trasmissioni dello
+   stesso file generano lo stesso flusso, quindi le ricezioni parziali si sommano.
 
 ### P3 — Velocità
-12. Affiancare più QR sullo schermo (tiling). `jsQR` legge un solo codice per immagine:
-    serve ritagliare le celle della griglia e decodificarle separatamente, oppure passare a
-    un decoder multi-simbolo.
-13. Sostituire LT con RaptorQ (RFC 6330). Guadagno ~15%, interessa solo `core.mjs`.
-14. Canale di ritorno bidirezionale: il ricevitore mostra un QR piccolo con i blocchi
-    mancanti, il trasmettitore salta quelli già completi.
+6. Affiancare più QR sullo schermo (tiling). `jsQR` legge un solo codice per immagine:
+   serve ritagliare le celle della griglia e decodificarle separatamente, oppure passare a
+   un decoder multi-simbolo. Con un pool di worker la struttura c'è già.
+7. Sostituire LT con RaptorQ (RFC 6330). Guadagno ~15%, interessa solo `core.mjs`.
+8. Canale di ritorno bidirezionale: il ricevitore mostra un QR piccolo con i blocchi
+   mancanti, il trasmettitore salta quelli già completi.
 
 ### P4 — Sicurezza
-15. Cifratura XChaCha20-Poly1305 (via `libsodium-wrappers`) prima del codice fontana.
-16. Il file scaricato va trattato come non fidato. Non aprirlo né mostrarne l'anteprima.
-17. Rivedere i limiti difensivi in `unpackManifest`: ci sono, vanno estesi a `compressedLens`.
+9. Cifratura XChaCha20-Poly1305 (via `libsodium-wrappers`) prima del codice fontana.
+10. Il file scaricato va trattato come non fidato. Non aprirlo né mostrarne l'anteprima.
 
 ---
 
@@ -177,8 +196,15 @@ lati deve mai tenere il file completo in memoria.
 - La scelta della maschera QR differisce da `segno` in 14 casi su 80. Funzionalmente
   irrilevante (ZBar e jsQR leggono tutto), ma la funzione di penalità potrebbe non essere
   esattamente conforme allo standard. Verificare se si vuole la conformità formale.
-- `TX.prepare` comprime due volte i blocchi in cui gzip non conviene. Sistemare.
-- Nessuna gestione del caso `K = 1` o `K = 2`, dove il codice fontana ha overhead pessimo
-  (misurato 1.9× per K = 2). Sotto K ≈ 20 conviene emettere i blocchi in ciclo semplice.
-- Il ricevitore non distingue «trasmissione ferma» da «canale pessimo»: aggiungere un
-  timeout che lo dica.
+- Il flag gzip è unico per tutto il file: su un file misto (metà già compressa, metà testo)
+  la decisione presa sul primo source block è sbagliata per gli altri. Per farlo per blocco
+  serve un bit nel frame, quindi `VERSION` 2.
+- `SB_RAW` è fisso a 4 MB: `TX.prepare` tiene in RAM tutti i payload preparati, quindi un
+  file grande sta interamente in memoria anche in trasmissione, non solo in ricezione.
+- Il piano sistematico per K ≤ 64 scandisce fino a `600·K + 8000` ESI cercando simboli di
+  grado 1. Costa qualche millisecondo alla preparazione e, se non copre tutti gli indici,
+  si ripiega silenziosamente sulla fontana pura. Non è mai capitato nei test, ma può.
+- `avgMs` nel resoconto è la latenza per tentativo, non il tempo di CPU: con due worker in
+  volo comprende l'attesa in coda, quindi appare più alto del costo reale di jsQR.
+- La ROI si impara dagli angoli dell'ultimo codice letto: se ci sono due schermi
+  trasmittenti nell'inquadratura, il riquadro rimbalza fra i due.

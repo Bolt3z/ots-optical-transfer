@@ -79,8 +79,12 @@ export function symbolNeighbours(esi, K, sessionSeed, cdf) {
 
 // ---------------------------------------------------------------- codice fontana
 
+/** Sotto questa soglia il codice fontana ha un overhead pessimo (1.9x misurato
+ *  per K=2), quindi l'encoder sceglie ESI sistematici. Vedi _systematicPlan. */
+export const SYSTEMATIC_UP_TO = 64;
+
 export class LTEncoder {
-  constructor(data, symbolSize, sessionSeed) {
+  constructor(data, symbolSize, sessionSeed, opts = {}) {
     this.symbolSize = symbolSize;
     this.sessionSeed = sessionSeed | 0;
     this.K = Math.ceil(data.length / symbolSize) || 1;
@@ -88,7 +92,39 @@ export class LTEncoder {
     this.buf.set(data);
     this.dataLen = data.length;
     this.cdf = robustSolitonCdf(this.K);
+
+    // Piano sistematico per K piccolo. NON e' un'estensione del protocollo:
+    // l'ESI viaggia nel frame e i vicini restano quelli normativi, quindi un
+    // ricevitore che non sa nulla di tutto questo decodifica comunque.
+    const upTo = opts.systematicUpTo === undefined ? SYSTEMATIC_UP_TO : opts.systematicUpTo;
+    this.plan = (this.K > 1 && this.K <= upTo) ? this._systematicPlan() : null;
+    this.planPos = 0;
+    this.esiNext = this.plan ? Math.max(...this.plan) + 1 : 0;
   }
+
+  /** Cerca, fra i primi ESI, simboli di grado 1 che coprano ogni indice una
+   *  volta: su canale pulito il blocco si decodifica con esattamente K simboli
+   *  invece di 1.6-1.9 K. Restituisce null se non riesce a coprire tutto. */
+  _systematicPlan() {
+    const need = new Set();
+    for (let i = 0; i < this.K; i++) need.add(i);
+    const plan = new Array(this.K);
+    const cap = this.K * 600 + 8000;
+    for (let esi = 0; esi < cap && need.size; esi++) {
+      const nb = symbolNeighbours(esi, this.K, this.sessionSeed, this.cdf);
+      if (nb.length !== 1 || !need.has(nb[0])) continue;
+      plan[nb[0]] = esi;
+      need.delete(nb[0]);
+    }
+    return need.size === 0 ? plan : null;
+  }
+
+  /** ESI da emettere: prima il piano sistematico (se c'e'), poi la fontana. */
+  nextEsi() {
+    if (this.plan && this.planPos < this.plan.length) return this.plan[this.planPos++];
+    return this.esiNext++;
+  }
+
   symbol(esi) {
     const nb = symbolNeighbours(esi, this.K, this.sessionSeed, this.cdf);
     const s = this.symbolSize;
@@ -290,22 +326,41 @@ export function packManifest(m) {
   return out;
 }
 
+// Limiti difensivi. Questo e' input non fidato: chiunque puo' mostrare un QR, e
+// un manifest malformato deve fallire subito, non allocare 4 GB. I controlli
+// vengono PRIMA di leggere gli array, altrimenti i limiti non servono a niente.
+export const MAX_SB = 20000;
+export const MAX_SB_BYTES = 1 << 26;        // 64 MiB per source block
+export const MAX_TOTAL_BYTES = 2 ** 42;
+
 export function unpackManifest(b) {
+  if (b.length < 51) throw new Error("manifest troncato");
   const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
   const origLen = dv.getFloat64(0);
-  const sha256 = b.subarray(8, 40);
   const symbolSize = dv.getUint16(40);
   const nSB = dv.getUint16(42);
   const flags = b[44];
   const sbRawSize = dv.getUint32(45);
   const nameLen = dv.getUint16(49);
+
+  if (symbolSize < 16 || symbolSize > 4096) throw new Error("symbolSize fuori intervallo");
+  if (nSB < 1 || nSB > MAX_SB) throw new Error("nSourceBlocks fuori intervallo");
+  if (!(origLen >= 0 && origLen < MAX_TOTAL_BYTES) || !Number.isInteger(origLen))
+    throw new Error("origLen fuori intervallo");
+  if (sbRawSize < 1 || sbRawSize > MAX_SB_BYTES) throw new Error("sbRawSize fuori intervallo");
+  if (b.length < 51 + nameLen + 4 * nSB) throw new Error("manifest troncato");
+
+  const sha256 = b.subarray(8, 40);
   const name = new TextDecoder().decode(b.subarray(51, 51 + nameLen));
   const compressedLens = [];
-  for (let i = 0; i < nSB; i++) compressedLens.push(dv.getUint32(51 + nameLen + 4 * i));
-  // Limiti difensivi: questo e' input non fidato (chiunque puo' mostrare un QR).
-  if (symbolSize < 16 || symbolSize > 4096) throw new Error("symbolSize fuori intervallo");
-  if (nSB < 1 || nSB > 20000) throw new Error("nSourceBlocks fuori intervallo");
-  if (!(origLen >= 0 && origLen < 2 ** 45)) throw new Error("origLen fuori intervallo");
+  let total = 0;
+  for (let i = 0; i < nSB; i++) {
+    const L = dv.getUint32(51 + nameLen + 4 * i);
+    if (L > MAX_SB_BYTES) throw new Error(`compressedLen[${i}] fuori intervallo`);
+    total += L;
+    compressedLens.push(L);
+  }
+  if (total > MAX_TOTAL_BYTES) throw new Error("dimensione totale fuori intervallo");
   return { origLen, sha256, symbolSize, flags, sbRawSize, name, compressedLens };
 }
 

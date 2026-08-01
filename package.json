@@ -1,0 +1,27 @@
+{
+  "name": "ots-optical-transfer",
+  "version": "1.0.0",
+  "description": "Trasferisce file fra due dispositivi con la sola luce: uno schermo mostra codici QR, una camera li guarda. Nessuna rete, nessun cavo, nessun account.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Edoardo Besana",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bolt3z/ots-optical-transfer.git"
+  },
+  "keywords": ["qr", "offline", "air-gap", "fountain-code", "file-transfer", "lt-code"],
+  "scripts": {
+    "build": "node build.mjs",
+    "test": "node build.mjs && node test/core.test.mjs && node test/e2e.test.mjs",
+    "test:core": "node test/core.test.mjs",
+    "test:e2e": "node test/e2e.test.mjs",
+    "test:browser": "node build.mjs && node test/browser.test.mjs",
+    "test:all": "npm test && node test/browser.test.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.10.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

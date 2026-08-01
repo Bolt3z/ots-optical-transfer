@@ -2,9 +2,12 @@ import fs from 'fs'; import vm from 'vm';
 import {createRequire} from 'module';
 const require=createRequire(import.meta.url);
 
-// carica il bundle OTS estratto dal file HTML COSTRUITO (non dai sorgenti)
+// carica il bundle OTS estratto dal file HTML COSTRUITO (non dai sorgenti).
+// Si cerca per contenuto, non per posizione: l'ordine dei tag <script> cambia.
 const html=fs.readFileSync(new URL('../dist/ots.html',import.meta.url),'utf8');
-const s2=[...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(m=>m[1])[1];
+const s2=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
+  .map(m=>m[1]).find(s=>s.includes('window.OTS ='));
+if(!s2) throw new Error('bundle OTS non trovato in dist/ots.html');
 const OTS=new Function('window','document', s2+'\nreturn window.OTS;')({addEventListener(){}},{getElementById:()=>null});
 if(!OTS) throw new Error('OTS non esportato');
 const jsQR=require('../vendor/jsQR.min.js');

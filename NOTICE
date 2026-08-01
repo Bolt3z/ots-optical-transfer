@@ -1,0 +1,13 @@
+OTS — Optical Transfer Stream
+Copyright (c) 2026 Edoardo Besana
+Distribuito con licenza MIT (vedi LICENSE).
+
+Questo prodotto include software di terze parti:
+
+  jsQR — decodificatore di codici QR
+  Copyright (c) 2016 Cosmo Wolfe
+  Licenza Apache 2.0, testo completo in vendor/jsQR.LICENSE
+  https://github.com/cozmo/jsQR
+
+  vendor/jsQR.min.js e' incluso senza modifiche e viene incorporato nel file
+  dist/ots.html, che quindi contiene sia codice MIT sia codice Apache 2.0.
