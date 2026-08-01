@@ -326,6 +326,67 @@ async function phaseReceive(mode, { noWorker = false, rvfcStall = false, video =
   await browser.close();
 }
 
+// ================= fase 5: Safari che rifiuta l'avvio automatico del video
+// Su iPhone play() rifiuta con NotAllowedError: l'attivazione dell'utente scade
+// se prima di chiamarla si aspetta qualcosa. Deve comparire un pulsante — dire
+// «toccalo» senza dare niente da toccare non serve a nessuno — e premendolo la
+// ricezione deve andare a termine.
+async function phaseBlockedAutoplay() {
+  console.log('\n[5] Safari che blocca l avvio automatico del video');
+  const browser = await launch();
+  const page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => {
+    const orig = HTMLMediaElement.prototype.play;
+    let first = true;
+    HTMLMediaElement.prototype.play = function () {
+      if (first && this.id === 'rx-video') {          // solo il primo tentativo
+        first = false;
+        const e = new Error('play() blocked'); e.name = 'NotAllowedError';
+        return Promise.reject(e);
+      }
+      return orig.call(this);
+    };
+  });
+  const dl = path.join(tmp, 'dl-autoplay');
+  fs.mkdirSync(dl, { recursive: true });
+  const cdp = await page.target().createCDPSession();
+  await cdp.send('Browser.setDownloadBehavior',
+    { behavior: 'allowAndName', downloadPath: dl, eventsEnabled: true });
+
+  await page.goto('file://' + HTML, { waitUntil: 'load' });
+  await page.click('#tab-recv');
+  await (await page.$('#rx-videofile')).uploadFile(path.join(tmp, 'cam.mp4'));
+  await new Promise((r) => setTimeout(r, 1200));
+
+  const state = await page.evaluate(() => ({
+    err: document.getElementById('rx-error').hidden ? '' : document.getElementById('rx-error').textContent,
+    playVisible: !document.getElementById('rx-play').hidden,
+  }));
+  ok(/NotAllowedError/.test(state.err), 'dice che l avvio automatico e stato rifiutato');
+  if (!ok(state.playVisible, 'compare il pulsante «Avvia il video»')) {
+    await browser.close(); return;
+  }
+
+  await page.click('#rx-play');
+  let done = false;
+  const t0 = Date.now();
+  while (Date.now() - t0 < 60000) {
+    await new Promise((r) => setTimeout(r, 1000));
+    if (await page.evaluate(() => !document.getElementById('rx-out').hidden)) { done = true; break; }
+  }
+  if (ok(done, `premendolo la ricezione arriva a termine (${((Date.now() - t0) / 1000).toFixed(1)}s)`)) {
+    ok(await page.evaluate(() => document.getElementById('rx-play').hidden),
+      'il pulsante scompare dopo l avvio');
+    await page.click('#rx-download');
+    await new Promise((r) => setTimeout(r, 1500));
+    const got = fs.readdirSync(dl);
+    ok(got.length === 1 && crypto.createHash('sha256')
+      .update(fs.readFileSync(path.join(dl, got[0]))).digest('hex') === sampleHash,
+      'file ricevuto byte-identico');
+  }
+  await browser.close();
+}
+
 // ============================ fase 4: un video che il browser non sa aprire
 // Deve dirlo, e presto. Prima restava muto a tempo indefinito.
 async function phaseUnplayable() {
@@ -370,6 +431,7 @@ try {
     if (vids.mp4) {
       await phaseReceive('video');
       if (vids.mov) await phaseReceive('video', { video: 'cam.mov' });
+      await phaseBlockedAutoplay();
     } else {
       console.log('\n[3] ricevitore da video registrato — saltato (ffmpeg assente)');
     }

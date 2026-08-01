@@ -184,6 +184,9 @@ a.dl{display:block;text-align:center;background:var(--phos);color:#0C1A13;text-d
     </div>
 
     <div class="stage"><video id="rx-video" hidden playsinline muted></video></div>
+    <!-- Compare se play() viene rifiutato: serve un gesto dell'utente vero, e
+         dirgli «toccalo» senza dargli niente da toccare non e' un gesto. -->
+    <button class="action" id="rx-play" hidden style="margin-bottom:14px">Avvia il video</button>
     <div class="strip" id="rx-strip"></div>
     <dl class="readout">
       <div><dt>Completato</dt><dd class="big" id="rx-pct">0%</dd></div>

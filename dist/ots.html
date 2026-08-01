@@ -193,6 +193,9 @@ a.dl{display:block;text-align:center;background:var(--phos);color:#0C1A13;text-d
     </div>
 
     <div class="stage"><video id="rx-video" hidden playsinline muted></video></div>
+    <!-- Compare se play() viene rifiutato: serve un gesto dell'utente vero, e
+         dirgli «toccalo» senza dargli niente da toccare non e' un gesto. -->
+    <button class="action" id="rx-play" hidden style="margin-bottom:14px">Avvia il video</button>
     <div class="strip" id="rx-strip"></div>
     <dl class="readout">
       <div><dt>Completato</dt><dd class="big" id="rx-pct">0%</dd></div>
@@ -1406,6 +1409,7 @@ const RX = {
 
   reset() {
     const now = performance.now();
+    this.startToken = (this.startToken || 0) + 1;   // invalida un avvio in corso
     this.st = {
       session: null, manifest: null, decoders: new Map(), seen: new Map(),
       done: new Map(), hashes: new Map(), frames: 0, bad: 0, fresh: 0,
@@ -1415,6 +1419,7 @@ const RX = {
     $("rx-out").hidden = true;
     $("rx-error").hidden = true;
     $("rx-hint").hidden = true;
+    $("rx-play").hidden = true;
     $("rx-strip").textContent = "";
     for (const id of ["rx-name", "rx-session", "rx-engine", "rx-eta", "rx-blocks", "rx-symbols"])
       $(id).textContent = "—";
@@ -1691,7 +1696,8 @@ const RX = {
   async startCamera() {
     this.reset();
     this.sourceKind = "camera";
-    await this.startScanner();
+    // getUserMedia prima dei worker: e' la chiamata che dipende dal gesto
+    // dell'utente, e Safari non aspetta.
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -1711,14 +1717,23 @@ const RX = {
       return;
     }
     const v = $("rx-video");
-    v.srcObject = this.stream; v.hidden = false;
+    v.srcObject = this.stream; v.hidden = false; v.controls = false;
+    const mine = this.startToken;
     try { await v.play(); }
     catch (err) { this.fail("Il video non parte: " + err.name); return; }
+    await this.startScanner();
+    if (mine !== this.startToken) return;
     this.running = true;
     this.scanLoop(v);
   },
 
-  async startVideoFile(file) {
+  /**
+   * NON async, e non e' una distrazione: `play()` deve partire nello stesso task
+   * del gesto dell'utente. Aspettando prima la creazione dei worker, Safari
+   * considera scaduta l'attivazione e rifiuta con NotAllowedError. Lo scanner si
+   * avvia dopo, e il video si riavvolge quando e' pronto.
+   */
+  startVideoFile(file) {
     this.reset();
     this.sourceKind = "file";
     const v = $("rx-video");
@@ -1726,16 +1741,33 @@ const RX = {
     if (this.videoUrl) URL.revokeObjectURL(this.videoUrl);
     this.videoUrl = URL.createObjectURL(file);
     v.hidden = false; v.muted = true; v.playsInline = true;
+    v.controls = true;              // un play nativo, se il nostro non basta
     // Prima di src: se il codec non va, l'errore arriva da qui e non da play().
     v.onerror = () => { this.stop(); this.fail(videoHelp(v)); };
     v.src = this.videoUrl;
+    v.play().then(() => this.videoStarted(v), (err) => this.videoBlocked(v, err));
+  },
+
+  /** play() rifiutato: si offre un pulsante, che e' un gesto vero. */
+  videoBlocked(v, err) {
+    if (err && err.name === "NotSupportedError") { this.fail(videoHelp(v)); return; }
+    this.fail("Safari non lascia partire il video da solo (" + (err && err.name)
+      + "). Premi «Avvia il video» qui sotto.");
+    const btn = $("rx-play");
+    btn.hidden = false;
+    btn.onclick = () => {
+      btn.hidden = true;
+      $("rx-error").hidden = true;
+      v.play().then(() => this.videoStarted(v),
+        (e) => this.fail("Il video non parte comunque: " + (e && e.name)));
+    };
+  },
+
+  async videoStarted(v) {
+    const mine = this.startToken;
+    v.pause();                      // si aspetta lo scanner, senza perdere l'inizio
     await this.startScanner();
-    try { await v.play(); }
-    catch (err) {
-      this.fail(err.name === "NotSupportedError" ? videoHelp(v)
-        : "Il video non parte: " + err.name + ". Toccalo per avviarlo a mano.");
-      return;
-    }
+    if (mine !== this.startToken) return;   // fermato mentre si avviava
     this.running = true;
     v.onended = () => {
       const wasRunning = this.running;
@@ -1751,6 +1783,9 @@ const RX = {
       }
     };
     this.scanLoop(v);
+    v.currentTime = 0;
+    try { await v.play(); }
+    catch (err) { this.fail("Il video si è fermato: " + err.name); }
   },
 
   stop() {
@@ -1764,6 +1799,7 @@ const RX = {
     this.rvfc = null;
     if (this.stream) { this.stream.getTracks().forEach((t) => t.stop()); this.stream = null; }
     if (this.scanner) this.scanner.stop();
+    $("rx-play").hidden = true;
     // onerror va staccato, o l'errore di una sorgente vecchia parla della nuova.
     if (v) { v.onerror = null; v.onended = null; v.pause(); v.srcObject = null; }
   },
