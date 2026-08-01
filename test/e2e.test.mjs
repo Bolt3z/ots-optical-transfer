@@ -1,16 +1,23 @@
-import fs from 'fs'; import vm from 'vm';
-import {createRequire} from 'module';
-const require=createRequire(import.meta.url);
+import fs from 'fs';
 
-// carica il bundle OTS estratto dal file HTML COSTRUITO (non dai sorgenti).
-// Si cerca per contenuto, non per posizione: l'ordine dei tag <script> cambia.
+// Tutto viene estratto dal file HTML COSTRUITO, non dai sorgenti: si prova cio'
+// che si spedisce. Anche jsQR, che sta nel tag non eseguito: caricarlo con
+// require() smetterebbe di funzionare, perche' con "type":"module" nel
+// package.json Node interpreta vendor/*.js come ESM.
 const html=fs.readFileSync(new URL('../dist/ots.html',import.meta.url),'utf8');
+const script=(re)=>{const m=html.match(re); return m && m[1];};
+
 const s2=[...html.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)]
   .map(m=>m[1]).find(s=>s.includes('window.OTS ='));
 if(!s2) throw new Error('bundle OTS non trovato in dist/ots.html');
 const OTS=new Function('window','document', s2+'\nreturn window.OTS;')({addEventListener(){}},{getElementById:()=>null});
 if(!OTS) throw new Error('OTS non esportato');
-const jsQR=require('../vendor/jsQR.min.js');
+
+const sJ=script(/<script[^>]*id="jsqr-src"[^>]*>([\s\S]*?)<\/script>/);
+if(!sJ) throw new Error('sorgente jsQR non trovato in dist/ots.html');
+// L'involucro UMD di jsQR si attacca a `self` quando esiste: gliene diamo uno.
+const jsQR=new Function('self', sJ+'\nreturn self.jsQR;')({});
+if(typeof jsQR!=='function') throw new Error('jsQR non si e caricato');
 
 const SB_RAW=1<<20;                 // 1 MiB per il test
 const gzip=async u=>new Uint8Array(await new Response(new Blob([u]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
