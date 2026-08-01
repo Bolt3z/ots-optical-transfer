@@ -48,8 +48,27 @@ Safari **non concede la camera a una pagina aperta da file locale**. Tre strade:
    aereo e continuare. È la strada consigliata.
 2. **Registra un video** dello schermo trasmittente con l'app Fotocamera, poi caricalo nel
    campo «da un video registrato». Funziona anche da file locale, e spesso decodifica più in
-   fretta del tempo reale.
+   fretta del tempo reale. **Caricalo sull'iPhone stesso**, vedi sotto.
 3. **Usa l'iPhone come trasmettitore**: mostrare i QR non richiede alcun permesso.
+
+### Il video registrato: dove caricarlo
+
+Il contenitore `.MOV` non è un problema — i browser lo leggono, perché condivide la struttura
+ISO-BMFF con `.mp4`. Il problema è il **codec**: con Impostazioni › Fotocamera › Formati su
+«Alta efficienza» l'iPhone registra in **HEVC/H.265**, che Safari legge ma **Chrome su Linux
+e Firefox no**.
+
+Quindi: carica il video **sull'iPhone**, dove Safari lo apre nativamente. Se invece lo vuoi
+decodificare sul PC, hai due strade:
+
+```bash
+ffmpeg -i IMG_0001.MOV -c:v libx264 -crf 20 -an video.mp4   # converti
+```
+
+oppure metti Formati su «Massima compatibilità» e rigira il video.
+
+Se carichi un video che il browser non sa aprire, l'app te lo dice entro mezzo secondo con
+l'istruzione per rimediare — non resta a fissare il vuoto.
 
 Su Android Chrome la camera funziona anche da `file://`.
 

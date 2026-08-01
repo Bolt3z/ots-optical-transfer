@@ -190,18 +190,35 @@ function writeY4M(frames) {
   return px;
 }
 
-function makeMp4() {
+function ff(args) {
   try {
-    execFileSync('ffmpeg', ['-loglevel', 'error', '-y', '-i', path.join(tmp, 'cam.y4m'),
-      '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20', path.join(tmp, 'cam.mp4')],
-      { stdio: ['ignore', 'ignore', 'pipe'] });
+    execFileSync('ffmpeg', ['-loglevel', 'error', '-y', ...args], { stdio: ['ignore', 'ignore', 'pipe'] });
     return true;
   } catch { return false; }
 }
 
+function makeVideos() {
+  const y4m = path.join(tmp, 'cam.y4m');
+  if (!ff(['-i', y4m, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20',
+    path.join(tmp, 'cam.mp4')])) return {};
+  const out = { mp4: true };
+  // Contenitore QuickTime, come i video dell'iPhone. canPlayType('video/quicktime')
+  // risponde "NO", ma da un Blob il browser annusa il contenuto e lo legge: la
+  // prova serve a non farsi ingannare da canPlayType.
+  out.mov = ff(['-i', path.join(tmp, 'cam.mp4'), '-c', 'copy', '-f', 'mov',
+    path.join(tmp, 'cam.mov')]);
+  // Un codec che nessun browser apre, per la via d'errore: con questo play() NON
+  // rifiuta, l'elemento emette `error`, e senza un ascoltatore la pagina resta
+  // muta per sempre. Era esattamente il sintomo di un video HEVC su Chrome.
+  out.bad = ff(['-i', path.join(tmp, 'cam.mp4'), '-c:v', 'mpeg4', '-q:v', '5', '-t', '4',
+    path.join(tmp, 'cam-nosupport.mp4')]);
+  return out;
+}
+
 // ================================================== fase 2 e 3: il ricevitore, davvero
-async function phaseReceive(mode, { noWorker = false, rvfcStall = false } = {}) {
-  const label = `${mode}${noWorker ? ' (senza worker)' : ''}${rvfcStall ? ' (rvfc che si blocca)' : ''}`;
+async function phaseReceive(mode, { noWorker = false, rvfcStall = false, video = 'cam.mp4' } = {}) {
+  const label = `${mode}${noWorker ? ' (senza worker)' : ''}${rvfcStall ? ' (rvfc che si blocca)' : ''}`
+    + (mode === 'video' ? ` — ${video}` : '');
   console.log(`\n[${mode === 'cam' ? 2 : 3}] ricevitore — ${label}`);
   const extra = mode === 'cam'
     ? ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
@@ -215,8 +232,8 @@ async function phaseReceive(mode, { noWorker = false, rvfcStall = false } = {}) 
 
   // Una cartella per variante, e svuotata: condividendola, il file della prova
   // precedente veniva contato come un secondo download.
-  const dl = path.join(tmp, ['dl', mode, noWorker && 'main', rvfcStall && 'stall']
-    .filter(Boolean).join('-'));
+  const dl = path.join(tmp, ['dl', mode, noWorker && 'main', rvfcStall && 'stall',
+    mode === 'video' && video.replace(/\W+/g, '')].filter(Boolean).join('-'));
   fs.rmSync(dl, { recursive: true, force: true });
   fs.mkdirSync(dl, { recursive: true });
   const cdp = await page.target().createCDPSession();
@@ -243,7 +260,7 @@ async function phaseReceive(mode, { noWorker = false, rvfcStall = false } = {}) 
   await page.click('#tab-recv');
 
   if (mode === 'cam') await page.click('#rx-cam');
-  else await (await page.$('#rx-videofile')).uploadFile(path.join(tmp, 'cam.mp4'));
+  else await (await page.$('#rx-videofile')).uploadFile(path.join(tmp, video));
 
   const t0 = Date.now();
   let done = false, err = '', last = null;
@@ -301,6 +318,36 @@ async function phaseReceive(mode, { noWorker = false, rvfcStall = false } = {}) 
   await browser.close();
 }
 
+// ============================ fase 4: un video che il browser non sa aprire
+// Deve dirlo, e presto. Prima restava muto a tempo indefinito.
+async function phaseUnplayable() {
+  console.log('\n[4] video con codec non supportato');
+  const browser = await launch();
+  const page = await browser.newPage();
+  await page.goto('file://' + HTML, { waitUntil: 'load' });
+  await page.click('#tab-recv');
+  await (await page.$('#rx-videofile')).uploadFile(path.join(tmp, 'cam-nosupport.mp4'));
+
+  const t0 = Date.now();
+  let msg = '';
+  while (Date.now() - t0 < 20000) {
+    await new Promise((r) => setTimeout(r, 500));
+    msg = await page.evaluate(() => {
+      const e = document.getElementById('rx-error');
+      return e.hidden ? '' : e.textContent;
+    });
+    if (msg) break;
+  }
+  const secs = (Date.now() - t0) / 1000;
+  if (ok(!!msg, `spiega il problema, in ${secs.toFixed(1)}s`)) {
+    console.log(`    «${msg.slice(0, 100)}...»`);
+    ok(secs < 12, `entro un tempo ragionevole (${secs.toFixed(1)}s)`);
+    ok(/HEVC|decodificare/.test(msg), 'il messaggio nomina la causa e la via d uscita');
+    ok(/ffmpeg|Safari/.test(msg), 'il messaggio dice cosa fare');
+  }
+  await browser.close();
+}
+
 // ============================================================================ via
 console.log(`OTS — prova in browser reale\n  chrome: ${CHROME}\n  lavoro: ${tmp}`);
 try {
@@ -311,8 +358,13 @@ try {
     await phaseReceive('cam');
     await phaseReceive('cam', { noWorker: true });
     await phaseReceive('cam', { rvfcStall: true });
-    if (makeMp4()) await phaseReceive('video');
-    else console.log('\n[3] ricevitore da video registrato — saltato (ffmpeg assente)');
+    const vids = makeVideos();
+    if (!vids.mp4) console.log('\n[3] ricevitore da video registrato — saltato (ffmpeg assente)');
+    else {
+      await phaseReceive('video');
+      if (vids.mov) await phaseReceive('video', { video: 'cam.mov' });
+      if (vids.bad) await phaseUnplayable();
+    }
   }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

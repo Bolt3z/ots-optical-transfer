@@ -175,7 +175,9 @@ a.dl{display:block;text-align:center;background:var(--phos);color:#0C1A13;text-d
       <div class="err" id="rx-error" hidden></div>
       <button class="action" id="rx-cam">Usa la camera</button>
       <label class="field" style="margin-top:14px"><span>Oppure: da un video registrato</span>
-        <input type="file" id="rx-videofile" accept="video/*"></label>
+        <!-- Le estensioni esplicite oltre a video/*: qualche selettore di file
+             filtra via i .mov dell'iPhone se si fida solo del tipo MIME. -->
+        <input type="file" id="rx-videofile" accept="video/*,.mov,.MOV,.mp4,.m4v"></label>
       <p class="note">Su iPhone una pagina aperta da file locale non puo' accedere alla camera.
         Riprendi lo schermo con l'app Fotocamera, poi carica il video qui: la decodifica
         funziona identica, spesso <strong>piu' in fretta del tempo reale</strong>.</p>

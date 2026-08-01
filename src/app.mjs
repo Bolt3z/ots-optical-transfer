@@ -10,6 +10,27 @@ const NO_CODE_MS = 3000;          // silenzio oltre il quale diciamo "non vedo n
 const STALLED_MS = 6000;          // leggiamo, ma niente di nuovo: TX fermo
 const RVFC_WATCHDOG_MS = 1200;    // senza callback video per tanto: si cambia motore
 const DECODE_OVERHEAD = 1.15;     // simboli raccolti per simbolo utile, misurato
+const NO_FRAMES_MS = 5000;        // nessun frame decodificato: si spiega perche'
+
+/**
+ * Perche' un video non parte. Serve un messaggio esplicito perche' il modo in
+ * cui questo fallisce e' insidioso: con un codec che il browser non sa
+ * decodificare, play() NON rifiuta — si risolve, e poi l'elemento emette un
+ * evento `error` che, se nessuno lo ascolta, lascia la pagina muta per sempre.
+ */
+function videoHelp(v) {
+  const code = v && v.error ? v.error.code : 0;
+  const decodeProblem = code === 3 || code === 4 || code === 0;
+  if (!decodeProblem) {
+    return "Il video si è interrotto durante la lettura (codice " + code + "). Riprova.";
+  }
+  return "Questo browser non sa decodificare questo video. L'iPhone, se è su "
+    + "«Alta efficienza», registra in HEVC/H.265, che Chrome su Linux e Firefox non "
+    + "aprono. Tre strade: carica il video sull'iPhone stesso, dove Safari legge HEVC; "
+    + "oppure metti Impostazioni › Fotocamera › Formati su «Massima compatibilità» e "
+    + "rigira; oppure converti sul PC con "
+    + "ffmpeg -i IMG_0001.MOV -c:v libx264 -crf 20 -an video.mp4";
+}
 
 // gzip vive dietro CompressionStream, che Safari ha solo dal 16.4. Senza di
 // esso non si fallisce: si trasmette non compresso.
@@ -191,7 +212,7 @@ const TX = {
 const RX = {
   stream: null, raf: null, rvfc: null, painter: null, running: false, st: null,
   scanner: null, videoUrl: null, dlUrl: null, locked: "", queue: Promise.resolve(),
-  driver: "raf",
+  driver: "raf", sourceKind: "camera",
 
   reset() {
     const now = performance.now();
@@ -384,6 +405,11 @@ const RX = {
   scanLoop(source) {
     this.queue = Promise.resolve();
     this.scanner.onText = (text) => this.handle(text);
+    // Non st.t0: quello parte da reset(), quindi comprende l'attesa del permesso
+    // camera e la creazione dei worker. Il conto dei frame mancanti va fatto da
+    // quando il ciclo gira davvero, o chi concede il permesso con calma vedrebbe
+    // un errore che non c'e'.
+    this.st.loopT0 = performance.now();
 
     // requestVideoFrameCallback scatta una volta per frame davvero presentato:
     // con requestAnimationFrame si rileggerebbe lo stesso frame piu' volte,
@@ -417,6 +443,18 @@ const RX = {
         gen++;
         lastTick = performance.now();
         schedule();
+      }
+      // Nessun frame decodificato affatto: il video non si apre o la camera non
+      // produce niente. Senza questo la pagina resta muta a tempo indefinito,
+      // che e' come si presentava un video HEVC su Chrome.
+      if (this.running && this.st && this.scanner.decodes === 0
+        && performance.now() - this.st.loopT0 > NO_FRAMES_MS) {
+        const kind = this.sourceKind;
+        this.stop();
+        this.fail(kind === "file" ? videoHelp(source)
+          : "La camera non produce nessun frame. Chiudi le altre app che la usano "
+            + "e riprova, oppure passa da «Da un video registrato».");
+        return;
       }
       // Il disegno va avanti anche se i frame non arrivano: e' cosi' che si vede
       // il messaggio «non vedo nessun codice» invece del nulla.
@@ -462,6 +500,7 @@ const RX = {
 
   async startCamera() {
     this.reset();
+    this.sourceKind = "camera";
     await this.startScanner();
     try {
       this.stream = await navigator.mediaDevices.getUserMedia({
@@ -491,16 +530,20 @@ const RX = {
 
   async startVideoFile(file) {
     this.reset();
-    await this.startScanner();
+    this.sourceKind = "file";
     const v = $("rx-video");
     v.srcObject = null;
     if (this.videoUrl) URL.revokeObjectURL(this.videoUrl);
     this.videoUrl = URL.createObjectURL(file);
-    v.src = this.videoUrl;
     v.hidden = false; v.muted = true; v.playsInline = true;
+    // Prima di src: se il codec non va, l'errore arriva da qui e non da play().
+    v.onerror = () => { this.stop(); this.fail(videoHelp(v)); };
+    v.src = this.videoUrl;
+    await this.startScanner();
     try { await v.play(); }
     catch (err) {
-      this.fail("Il video non parte: " + err.name + ". Toccalo per avviarlo a mano.");
+      this.fail(err.name === "NotSupportedError" ? videoHelp(v)
+        : "Il video non parte: " + err.name + ". Toccalo per avviarlo a mano.");
       return;
     }
     this.running = true;
@@ -531,7 +574,8 @@ const RX = {
     this.rvfc = null;
     if (this.stream) { this.stream.getTracks().forEach((t) => t.stop()); this.stream = null; }
     if (this.scanner) this.scanner.stop();
-    if (v) { v.pause(); v.srcObject = null; }
+    // onerror va staccato, o l'errore di una sorgente vecchia parla della nuova.
+    if (v) { v.onerror = null; v.onended = null; v.pause(); v.srcObject = null; }
   },
 };
 
