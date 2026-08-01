@@ -18,6 +18,11 @@ jobs:
 
       - run: npm install --no-audit --no-fund
 
+      # Senza ffmpeg il test in browser salta il percorso «da video registrato»,
+      # che e' quello che si usa su iPhone: vale i venti secondi.
+      - name: ffmpeg, per il percorso da video registrato
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
       - name: Costruisci il bundle
         run: node build.mjs
 
