@@ -9,6 +9,7 @@
     "type": "git",
     "url": "git+https://github.com/Bolt3z/ots-optical-transfer.git"
   },
+  "homepage": "https://ots.besana.dev/",
   "keywords": ["qr", "offline", "air-gap", "fountain-code", "file-transfer", "lt-code"],
   "scripts": {
     "build": "node build.mjs",

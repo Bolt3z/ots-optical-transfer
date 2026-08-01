@@ -9,7 +9,7 @@ codici QR, una camera li guarda. Nessuna rete, nessun cavo, nessun account, ness
 `dist/ots.html` è un **unico file** che contiene tutto — protocollo, encoder QR, decoder,
 interfaccia. Aprilo e funziona, anche con il Wi-Fi staccato.
 
-**Provalo subito:** <https://bolt3z.github.io/ots-optical-transfer/>
+**Provalo subito:** <https://ots.besana.dev/>
 
 ## Provalo in un minuto
 
