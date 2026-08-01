@@ -227,6 +227,7 @@ const RX = {
     $("rx-error").hidden = true;
     $("rx-hint").hidden = true;
     $("rx-play").hidden = true;
+    $("rx-play-note").hidden = true;
     $("rx-strip").textContent = "";
     for (const id of ["rx-name", "rx-session", "rx-engine", "rx-eta", "rx-blocks", "rx-symbols"])
       $(id).textContent = "—";
@@ -555,18 +556,26 @@ const RX = {
     v.play().then(() => this.videoStarted(v), (err) => this.videoBlocked(v, err));
   },
 
-  /** play() rifiutato: si offre un pulsante, che e' un gesto vero. */
+  /**
+   * play() rifiutato. Su iPhone e' la norma, non un guasto: la scelta del file
+   * avviene nella schermata nativa di Foto, che non concede alla pagina
+   * un'attivazione utente, quindi nessun ordine di chiamate rende play()
+   * automatico. Si chiede un tocco, che e' l'unico gesto che Safari accetta.
+   */
   videoBlocked(v, err) {
     if (err && err.name === "NotSupportedError") { this.fail(videoHelp(v)); return; }
-    this.fail("Safari non lascia partire il video da solo (" + (err && err.name)
-      + "). Premi «Avvia il video» qui sotto.");
-    const btn = $("rx-play");
+    const note = $("rx-play-note"), btn = $("rx-play");
+    note.textContent = "Safari non fa partire i video da solo: premi qui sotto per "
+      + "iniziare a leggere. Per evitare il tocco, disattiva Risparmio energetico, "
+      + "oppure metti la Riproduzione automatica su «Consenti tutto» nelle "
+      + "impostazioni del sito.";
+    note.hidden = false;
     btn.hidden = false;
     btn.onclick = () => {
-      btn.hidden = true;
-      $("rx-error").hidden = true;
+      btn.hidden = true; note.hidden = true;
       v.play().then(() => this.videoStarted(v),
-        (e) => this.fail("Il video non parte comunque: " + (e && e.name)));
+        (e) => this.fail("Il video non parte comunque: " + (e && e.name)
+          + ". Prova con i controlli del video qui sopra."));
     };
   },
 
@@ -607,6 +616,7 @@ const RX = {
     if (this.stream) { this.stream.getTracks().forEach((t) => t.stop()); this.stream = null; }
     if (this.scanner) this.scanner.stop();
     $("rx-play").hidden = true;
+    $("rx-play-note").hidden = true;
     // onerror va staccato, o l'errore di una sorgente vecchia parla della nuova.
     if (v) { v.onerror = null; v.onended = null; v.pause(); v.srcObject = null; }
   },

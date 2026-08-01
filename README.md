@@ -70,6 +70,13 @@ oppure metti Formati su «Massima compatibilità» e rigira il video.
 Se carichi un video che il browser non sa aprire, l'app te lo dice entro mezzo secondo con
 l'istruzione per rimediare — non resta a fissare il vuoto.
 
+**Su iPhone serve un tocco per far partire il video, e non è un difetto.** La scelta del file
+avviene nella schermata nativa di Foto, che non concede alla pagina un'attivazione utente:
+Safari rifiuta `play()` programmatico qualunque sia l'ordine delle chiamate. L'app mostra un
+pulsante *Avvia la lettura*, che è l'unico gesto che Safari accetta. Per evitare il tocco:
+disattiva Risparmio energetico, oppure metti la Riproduzione automatica su «Consenti tutto»
+nelle impostazioni del sito in Safari.
+
 Su Android Chrome la camera funziona anche da `file://`.
 
 ## Su PC, senza rete

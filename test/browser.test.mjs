@@ -360,10 +360,14 @@ async function phaseBlockedAutoplay() {
 
   const state = await page.evaluate(() => ({
     err: document.getElementById('rx-error').hidden ? '' : document.getElementById('rx-error').textContent,
+    note: document.getElementById('rx-play-note').hidden ? '' : document.getElementById('rx-play-note').textContent,
     playVisible: !document.getElementById('rx-play').hidden,
   }));
-  ok(/NotAllowedError/.test(state.err), 'dice che l avvio automatico e stato rifiutato');
-  if (!ok(state.playVisible, 'compare il pulsante «Avvia il video»')) {
+  // Su iPhone chiedere un tocco e' la norma, non un guasto: deve arrivare come
+  // il passo successivo, non come un errore rosso.
+  ok(state.err === '', `non lo presenta come errore${state.err ? ': ' + state.err : ''}`);
+  ok(/premi/i.test(state.note), 'spiega che serve un tocco e perché');
+  if (!ok(state.playVisible, 'compare il pulsante «Avvia la lettura»')) {
     await browser.close(); return;
   }
 
