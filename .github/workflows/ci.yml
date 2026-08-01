@@ -9,6 +9,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Un limite esplicito: senza, uno step appeso brucia sei ore di runner.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -18,10 +20,14 @@ jobs:
 
       - run: npm install --no-audit --no-fund
 
-      # Senza ffmpeg il test in browser salta il percorso «da video registrato»,
-      # che e' quello che si usa su iPhone: vale i venti secondi.
-      - name: ffmpeg, per il percorso da video registrato
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      # Con ffmpeg il test in browser copre anche i video veri (.mp4 e .mov), che
+      # e' il percorso usato su iPhone. Senza, li salta e prova comunque la via
+      # d'errore. E' best effort e limitato nel tempo perche' su questo runner
+      # `apt-get install ffmpeg` una volta e' rimasto appeso oltre 11 minuti.
+      - name: ffmpeg (facoltativo, per i video veri)
+        continue-on-error: true
+        timeout-minutes: 4
+        run: sudo apt-get install -y --no-install-recommends ffmpeg
 
       - name: Costruisci il bundle
         run: node build.mjs

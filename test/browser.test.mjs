@@ -198,20 +198,28 @@ function ff(args) {
 }
 
 function makeVideos() {
+  const out = {};
+  // La via d'errore si prova SEMPRE, anche senza ffmpeg: e' la piu' importante,
+  // perche' era quella che restava muta. Con ffmpeg si usa un contenitore valido
+  // con un codec che nessun browser apre (fedele al caso HEVC); senza, bastano
+  // byte casuali — in entrambi i casi l'elemento video emette `error`, play()
+  // non rifiuta, e senza un ascoltatore la pagina non dice niente.
   const y4m = path.join(tmp, 'cam.y4m');
-  if (!ff(['-i', y4m, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20',
-    path.join(tmp, 'cam.mp4')])) return {};
-  const out = { mp4: true };
-  // Contenitore QuickTime, come i video dell'iPhone. canPlayType('video/quicktime')
-  // risponde "NO", ma da un Blob il browser annusa il contenuto e lo legge: la
-  // prova serve a non farsi ingannare da canPlayType.
-  out.mov = ff(['-i', path.join(tmp, 'cam.mp4'), '-c', 'copy', '-f', 'mov',
-    path.join(tmp, 'cam.mov')]);
-  // Un codec che nessun browser apre, per la via d'errore: con questo play() NON
-  // rifiuta, l'elemento emette `error`, e senza un ascoltatore la pagina resta
-  // muta per sempre. Era esattamente il sintomo di un video HEVC su Chrome.
-  out.bad = ff(['-i', path.join(tmp, 'cam.mp4'), '-c:v', 'mpeg4', '-q:v', '5', '-t', '4',
-    path.join(tmp, 'cam-nosupport.mp4')]);
+  if (ff(['-i', y4m, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-crf', '20',
+    path.join(tmp, 'cam.mp4')])) {
+    out.mp4 = true;
+    // Contenitore QuickTime, come i video dell'iPhone. canPlayType(
+    // 'video/quicktime') risponde "NO", ma da un Blob il browser annusa il
+    // contenuto e lo legge: la prova serve a non farsi ingannare da canPlayType.
+    out.mov = ff(['-i', path.join(tmp, 'cam.mp4'), '-c', 'copy', '-f', 'mov',
+      path.join(tmp, 'cam.mov')]);
+    out.bad = ff(['-i', path.join(tmp, 'cam.mp4'), '-c:v', 'mpeg4', '-q:v', '5', '-t', '4',
+      path.join(tmp, 'cam-nosupport.mp4')]);
+  }
+  if (!out.bad) {
+    fs.writeFileSync(path.join(tmp, 'cam-nosupport.mp4'), crypto.randomBytes(64 * 1024));
+    out.bad = true;
+  }
   return out;
 }
 
@@ -359,12 +367,13 @@ try {
     await phaseReceive('cam', { noWorker: true });
     await phaseReceive('cam', { rvfcStall: true });
     const vids = makeVideos();
-    if (!vids.mp4) console.log('\n[3] ricevitore da video registrato — saltato (ffmpeg assente)');
-    else {
+    if (vids.mp4) {
       await phaseReceive('video');
       if (vids.mov) await phaseReceive('video', { video: 'cam.mov' });
-      if (vids.bad) await phaseUnplayable();
+    } else {
+      console.log('\n[3] ricevitore da video registrato — saltato (ffmpeg assente)');
     }
+    await phaseUnplayable();
   }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
