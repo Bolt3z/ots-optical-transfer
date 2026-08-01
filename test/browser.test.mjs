@@ -156,9 +156,9 @@ async function phaseTransmit() {
 }
 
 // ============================================== il video finto per la camera finta
-function writeY4M(frames) {
+function writeY4M(frames, name = 'cam.y4m') {
   const OTS = loadOTS();
-  const fd = fs.openSync(path.join(tmp, 'cam.y4m'), 'w');
+  const fd = fs.openSync(path.join(tmp, name), 'w');
   // writeSync e non uno stream: il Buffer si riusa, quindi la scrittura deve
   // finire prima di mutarlo (con createWriteStream i frame uscivano identici).
   const w = (b) => fs.writeSync(fd, typeof b === 'string' ? Buffer.from(b) : b);
@@ -186,7 +186,7 @@ function writeY4M(frames) {
     w('FRAME\n'); w(Y); w(U); w(V);
   }
   fs.closeSync(fd);
-  console.log(`    ${frames.length} frame ${VW}x${VH} @${VFPS}fps, ${px}px per modulo`);
+  console.log(`    ${name}: ${frames.length} frame ${VW}x${VH} @${VFPS}fps, ${px}px per modulo`);
   return px;
 }
 
@@ -215,6 +215,10 @@ function makeVideos() {
       path.join(tmp, 'cam.mov')]);
     out.bad = ff(['-i', path.join(tmp, 'cam.mp4'), '-c:v', 'mpeg4', '-q:v', '5', '-t', '4',
       path.join(tmp, 'cam-nosupport.mp4')]);
+    // Un video troppo corto per ricostruire il file: serve a provare che il
+    // ricevitore lo rilegga e poi si arrenda spiegandolo, invece di inchiodarsi.
+    out.short = ff(['-i', path.join(tmp, 'cam-short.y4m'), '-c:v', 'libx264',
+      '-pix_fmt', 'yuv420p', '-crf', '20', path.join(tmp, 'cam-short.mp4')]);
   }
   if (!out.bad) {
     fs.writeFileSync(path.join(tmp, 'cam-nosupport.mp4'), crypto.randomBytes(64 * 1024));
@@ -326,6 +330,39 @@ async function phaseReceive(mode, { noWorker = false, rvfcStall = false, video =
   await browser.close();
 }
 
+// ==================== fase 6: un video troppo corto per ricostruire il file
+// Deve rileggerlo — i frame persi al primo giro si recuperano al secondo — e poi
+// arrendersi spiegandolo. Prima si fermava alla fine del video e restava lì.
+async function phaseTooShort() {
+  console.log('\n[6] video troppo corto');
+  const browser = await launch();
+  const page = await browser.newPage();
+  await page.goto('file://' + HTML, { waitUntil: 'load' });
+  await page.click('#tab-recv');
+  await (await page.$('#rx-videofile')).uploadFile(path.join(tmp, 'cam-short.mp4'));
+
+  const t0 = Date.now();
+  let msg = '', maxPass = 0;
+  while (Date.now() - t0 < 90000) {
+    await new Promise((r) => setTimeout(r, 700));
+    const s = await page.evaluate(() => ({
+      err: document.getElementById('rx-error').hidden ? '' : document.getElementById('rx-error').textContent,
+      frames: document.getElementById('rx-frames').textContent,
+      pct: document.getElementById('rx-pct').textContent,
+    }));
+    const m = /giro (\d+)/.exec(s.frames);
+    if (m) maxPass = Math.max(maxPass, +m[1]);
+    if (s.err) { msg = s.err; break; }
+  }
+  const secs = (Date.now() - t0) / 1000;
+  ok(maxPass >= 2, `rilegge il video invece di fermarsi (arrivato al giro ${maxPass})`);
+  if (ok(!!msg, `si arrende spiegando, in ${secs.toFixed(1)}s`)) {
+    console.log(`    «${msg.slice(0, 110)}...»`);
+    ok(/frame distinti|più a lungo/.test(msg), 'dice che il video è troppo corto');
+  }
+  await browser.close();
+}
+
 // ================= fase 5: Safari che rifiuta l'avvio automatico del video
 // Su iPhone play() rifiuta con NotAllowedError: l'attivazione dell'utente scade
 // se prima di chiamarla si aspetta qualcosa. Deve comparire un pulsante — dire
@@ -426,8 +463,11 @@ console.log(`OTS — prova in browser reale\n  chrome: ${CHROME}\n  lavoro: ${tm
 try {
   const frames = await phaseTransmit();
   if (frames) {
-    console.log('\n    costruzione del video finto per la camera');
+    console.log('\n    costruzione dei video finti');
     writeY4M(frames);
+    // Meta' dei simboli necessari: un giro non basta, e nessun numero di riletture
+    // puo' bastare. Il ricevitore deve accorgersene e dirlo.
+    writeY4M(frames.slice(0, 24), 'cam-short.y4m');
     await phaseReceive('cam');
     await phaseReceive('cam', { noWorker: true });
     await phaseReceive('cam', { rvfcStall: true });
@@ -436,6 +476,7 @@ try {
       await phaseReceive('video');
       if (vids.mov) await phaseReceive('video', { video: 'cam.mov' });
       await phaseBlockedAutoplay();
+      if (vids.short) await phaseTooShort();
     } else {
       console.log('\n[3] ricevitore da video registrato — saltato (ffmpeg assente)');
     }

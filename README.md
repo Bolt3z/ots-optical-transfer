@@ -70,6 +70,12 @@ oppure metti Formati su «Massima compatibilità» e rigira il video.
 Se carichi un video che il browser non sa aprire, l'app te lo dice entro mezzo secondo con
 l'istruzione per rimediare — non resta a fissare il vuoto.
 
+Il video viene **riletto automaticamente** finché serve: i frame persi al primo giro — worker
+occupati, sfocature, riflessi — si recuperano al secondo, e il codice fontana non ha bisogno
+che arrivino in ordine. Se un giro intero non aggiunge nessun simbolo nuovo, il video contiene
+troppi pochi frame distinti e l'app lo dice: riprendi più a lungo, la trasmissione va in ciclo
+continuo.
+
 **Su iPhone serve un tocco per far partire il video, e non è un difetto.** La scelta del file
 avviene nella schermata nativa di Foto, che non concede alla pagina un'attivazione utente:
 Safari rifiuta `play()` programmatico qualunque sia l'ordine delle chiamate. L'app mostra un

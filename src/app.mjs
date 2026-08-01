@@ -11,6 +11,7 @@ const STALLED_MS = 6000;          // leggiamo, ma niente di nuovo: TX fermo
 const RVFC_WATCHDOG_MS = 1200;    // senza callback video per tanto: si cambia motore
 const DECODE_OVERHEAD = 1.15;     // simboli raccolti per simbolo utile, misurato
 const NO_FRAMES_MS = 5000;        // nessun frame decodificato: si spiega perche'
+const MAX_PASSES = 12;            // riletture del video prima di arrendersi
 
 /**
  * Perche' un video non parte. Serve un messaggio esplicito perche' il modo in
@@ -220,6 +221,7 @@ const RX = {
     this.st = {
       session: null, manifest: null, decoders: new Map(), seen: new Map(),
       done: new Map(), hashes: new Map(), frames: 0, bad: 0, fresh: 0,
+      passes: 0, passFresh: 0,
       t0: now, lastRead: now, lastFresh: now, note: null,
     };
     this.locked = "";
@@ -344,7 +346,8 @@ const RX = {
     $("rx-pct").textContent = `${(pct * 100).toFixed(1)}%`;
     $("rx-blocks").textContent = n ? `${st.done.size}/${n}` : "—";
     $("rx-symbols").textContent = totK ? `${totGot} / ~${Math.ceil(totK * DECODE_OVERHEAD)}` : "—";
-    $("rx-frames").textContent = `${st.frames} letti · ${st.bad} scartati`;
+    $("rx-frames").textContent = `${st.frames} letti · ${st.bad} scartati`
+      + (st.passes ? ` · giro ${st.passes + 1}` : "");
     const el = (performance.now() - st.t0) / 1000;
     $("rx-eta").textContent = pct > 0.02 && !allDone ? fmtTime(el / pct - el) : "—";
 
@@ -536,6 +539,43 @@ const RX = {
   },
 
   /**
+   * Il video e' finito. Rivederlo NON e' inutile: i frame persi al primo giro
+   * (worker occupati, sfocature, riflessi) si leggono al secondo, e il codice
+   * fontana non ha bisogno che arrivino in ordine. Quindi si riavvolge e si
+   * riparte, finche' un giro intero smette di aggiungere simboli nuovi: quello
+   * e' il segno che il video non contiene abbastanza frame distinti, e insistere
+   * non servirebbe. Prima, semplicemente, si fermava.
+   */
+  videoEnded(v) {
+    if (!this.running || !this.st) return;
+    const st = this.st;
+    if (!$("rx-out").hidden) return;              // completato: niente da fare
+    st.passes++;
+    const gained = st.fresh - st.passFresh;
+    st.passFresh = st.fresh;
+
+    if (!st.manifest) {
+      this.stop();
+      this.fail("Il video è finito senza che sia mai arrivato un manifest. Riprendi lo "
+        + "schermo più da vicino e a fuoco, con tutto il codice dentro l'inquadratura.");
+      return;
+    }
+    if (gained === 0 || st.passes >= MAX_PASSES) {
+      this.stop();
+      this.fail(`Il video è stato riletto ${st.passes} volte e l'ultimo giro non ha `
+        + "aggiunto nessun simbolo nuovo: contiene troppi pochi frame distinti per "
+        + "ricostruire il file. Riprendi lo schermo più a lungo — la trasmissione va in "
+        + "ciclo continuo, basta filmarla per più tempo.");
+      return;
+    }
+    v.currentTime = 0;
+    v.play().catch((err) => {
+      this.stop();
+      this.fail("Il video non è ripartito: " + err.name + ". Premi play sui controlli.");
+    });
+  },
+
+  /**
    * NON async, e non e' una distrazione: `play()` deve partire nello stesso task
    * del gesto dell'utente. Aspettando prima la creazione dei worker, Safari
    * considera scaduta l'attivazione e rifiuta con NotAllowedError. Lo scanner si
@@ -585,19 +625,7 @@ const RX = {
     await this.startScanner();
     if (mine !== this.startToken) return;   // fermato mentre si avviava
     this.running = true;
-    v.onended = () => {
-      const wasRunning = this.running;
-      this.running = false;
-      this.paint();
-      if (!wasRunning || !this.st) return;
-      if (!this.st.manifest) {
-        this.fail("Video finito senza leggere un manifest. Riprendi lo schermo più "
-          + "da vicino, a fuoco, con tutto il codice dentro l'inquadratura.");
-      } else if ($("rx-out").hidden) {
-        this.fail("Video finito prima di completare il file: riprendi più a lungo, "
-          + "la trasmissione va in ciclo continuo.");
-      }
-    };
+    v.onended = () => this.videoEnded(v);
     this.scanLoop(v);
     v.currentTime = 0;
     try { await v.play(); }
