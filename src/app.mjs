@@ -8,6 +8,8 @@ const MANIFEST_EVERY = 16;        // un manifest ogni N frame
 const PASS_OVERHEAD = 1.4;        // simboli emessi per blocco = K * questo
 const NO_CODE_MS = 3000;          // silenzio oltre il quale diciamo "non vedo nulla"
 const STALLED_MS = 6000;          // leggiamo, ma niente di nuovo: TX fermo
+const RVFC_WATCHDOG_MS = 1200;    // senza callback video per tanto: si cambia motore
+const DECODE_OVERHEAD = 1.15;     // simboli raccolti per simbolo utile, misurato
 
 // gzip vive dietro CompressionStream, che Safari ha solo dal 16.4. Senza di
 // esso non si fallisce: si trasmette non compresso.
@@ -189,6 +191,7 @@ const TX = {
 const RX = {
   stream: null, raf: null, rvfc: null, painter: null, running: false, st: null,
   scanner: null, videoUrl: null, dlUrl: null, locked: "", queue: Promise.resolve(),
+  driver: "raf",
 
   reset() {
     const now = performance.now();
@@ -202,8 +205,9 @@ const RX = {
     $("rx-error").hidden = true;
     $("rx-hint").hidden = true;
     $("rx-strip").textContent = "";
-    for (const id of ["rx-name", "rx-size", "rx-session", "rx-engine", "rx-eta", "rx-blocks"])
+    for (const id of ["rx-name", "rx-session", "rx-engine", "rx-eta", "rx-blocks", "rx-symbols"])
       $(id).textContent = "—";
+    $("rx-size").textContent = "";
     $("rx-pct").textContent = "0%";
     if (this.dlUrl) { URL.revokeObjectURL(this.dlUrl); this.dlUrl = null; }
   },
@@ -236,7 +240,7 @@ const RX = {
         st.manifest = m;
         st.fresh++; st.lastFresh = performance.now();
         $("rx-name").textContent = m.name;
-        $("rx-size").textContent = fmtBytes(m.origLen);
+        $("rx-size").textContent = "· " + fmtBytes(m.origLen);
       }
       return;
     }
@@ -292,18 +296,38 @@ const RX = {
     if (!st) return;
     const m = st.manifest;
     const n = m ? m.compressedLens.length : 0;
-    const solved = [...st.decoders.values()].reduce((a, d) => a + d.progress, 0);
-    const pct = n ? (st.done.size + solved) / n : 0;
+
+    // Progresso sui SIMBOLI RACCOLTI, non sulla frazione risolta dal peeling.
+    // In un codice fontana il peeling non parte finche' non si e' vicini a K:
+    // con K = 4000 solo lo 0,4% dei simboli ha grado 1, quindi la frazione
+    // risolta resta 0,0% per quasi tutto il trasferimento e l'app sembra rotta.
+    // I simboli raccolti invece crescono dal primo frame.
+    let need = 0, got = 0, totK = 0, totGot = 0;
+    for (let i = 0; i < n; i++) {
+      const K = OTS.kForBlock(m.compressedLens[i], m.symbolSize);
+      const share = K * DECODE_OVERHEAD;
+      totK += K; need += share;
+      if (st.done.has(i)) { got += share; totGot += K; }
+      else {
+        const d = st.decoders.get(i);
+        const r = d ? d.received : 0;
+        got += Math.min(r, share); totGot += r;
+      }
+    }
+    const allDone = n > 0 && st.done.size === n;
+    // Fermo a 99,9 finche' non e' davvero finito: il 100% deve voler dire finito.
+    const pct = allDone ? 1 : (need ? Math.min(0.999, got / need) : 0);
     $("rx-pct").textContent = `${(pct * 100).toFixed(1)}%`;
     $("rx-blocks").textContent = n ? `${st.done.size}/${n}` : "—";
+    $("rx-symbols").textContent = totK ? `${totGot} / ~${Math.ceil(totK * DECODE_OVERHEAD)}` : "—";
     $("rx-frames").textContent = `${st.frames} letti · ${st.bad} scartati`;
     const el = (performance.now() - st.t0) / 1000;
-    $("rx-eta").textContent = pct > 0.02 ? fmtTime(el / pct - el) : "—";
+    $("rx-eta").textContent = pct > 0.02 && !allDone ? fmtTime(el / pct - el) : "—";
 
     const sc = this.scanner;
     $("rx-engine").textContent = sc && sc.decodes
       ? `${sc.mode}${sc.workers > 1 ? "×" + sc.workers : ""} · ${sc.avgMs.toFixed(0)} ms`
-        + `${sc.roiActive ? " · ROI" : ""}${this.locked ? " · " + this.locked : ""}`
+        + ` · ${this.driver}${sc.roiActive ? " · ROI" : ""}${this.locked ? " · " + this.locked : ""}`
       : "—";
 
     const note = this.health();
@@ -364,24 +388,57 @@ const RX = {
     // requestVideoFrameCallback scatta una volta per frame davvero presentato:
     // con requestAnimationFrame si rileggerebbe lo stesso frame piu' volte,
     // bruciando batteria per decodificare doppioni.
-    const rvfc = typeof source.requestVideoFrameCallback === "function";
-    const tick = () => {
-      if (!this.running) return;
+    this.driver = typeof source.requestVideoFrameCallback === "function" ? "rvfc" : "raf";
+    let lastTick = performance.now();
+    let gen = 0;                  // uccide la catena precedente quando si cambia motore
+
+    const tick = (mine) => {
+      if (!this.running || mine !== gen) return;
+      lastTick = performance.now();
       if (source.readyState >= 2 && source.videoWidth) this.scanner.pump(source);
       if (!this.running) return;
-      if (rvfc) this.rvfc = source.requestVideoFrameCallback(tick);
-      else this.raf = requestAnimationFrame(tick);
+      schedule();
     };
-    tick();
-    // Il disegno va avanti anche se i frame non arrivano: e' cosi' che si vede
-    // il messaggio «non vedo nessun codice» invece del nulla.
-    this.painter = setInterval(() => this.paint(), 300);
+    const schedule = () => {
+      const mine = gen;
+      if (this.driver === "rvfc") this.rvfc = source.requestVideoFrameCallback(() => tick(mine));
+      else this.raf = requestAnimationFrame(() => tick(mine));
+    };
+    schedule();
+
+    this.painter = setInterval(() => {
+      // Su alcuni Safari requestVideoFrameCallback puo' smettere di scattare su
+      // uno stream della camera: il ciclo si fermerebbe in silenzio e si
+      // vedrebbe solo «nessun codice leggibile». Se le callback non arrivano si
+      // passa a requestAnimationFrame, e non si torna indietro.
+      if (this.running && this.driver === "rvfc"
+        && performance.now() - lastTick > RVFC_WATCHDOG_MS) {
+        this.driver = "raf";
+        gen++;
+        lastTick = performance.now();
+        schedule();
+      }
+      // Il disegno va avanti anche se i frame non arrivano: e' cosi' che si vede
+      // il messaggio «non vedo nessun codice» invece del nulla.
+      this.paint();
+    }, 300);
   },
 
-  /** Lo schermo trasmittente e' immobile: una camera che continua a rifare fuoco
-   *  ed esposizione fa solo danni. Blocchiamo quello che il dispositivo dichiara
-   *  di saper bloccare, e mostriamo cos'e' passato davvero. */
+  /**
+   * Lo schermo trasmittente e' immobile, quindi in teoria conviene bloccare
+   * fuoco ed esposizione dopo il primo aggancio.
+   *
+   * In pratica NON e' attivo per default, e la ragione e' un guasto vero: su
+   * iPhone il blocco scatta esattamente quando arriva il primo manifest, e se
+   * il dispositivo fissa il fuoco nel momento sbagliato da li' in poi ogni
+   * frame e' sfocato. Il sintomo e' «legge qualche frame, poi nessun codice
+   * leggibile», che e' il caso base rotto da un'ottimizzazione.
+   *
+   * Si abilita con window.OTS_LOCK_CAMERA = true prima di avviare la ricezione,
+   * per chi vuole provarla su un dispositivo che la gestisce bene.
+   */
   async lockCamera() {
+    if (!self.OTS_LOCK_CAMERA) return;
     const track = this.stream && this.stream.getVideoTracks()[0];
     if (!track || typeof track.getCapabilities !== "function") return;
     let caps = {};
@@ -533,4 +590,6 @@ window.addEventListener("DOMContentLoaded", () => {
 });
 
 // Appiglio per diagnosticare da telefono, dove una console comoda non c'e'.
+// OTS_NO_WORKER = true   decodifica sul thread principale
+// OTS_LOCK_CAMERA = true prova a bloccare fuoco/esposizione dopo l'aggancio
 window.OTS_DEBUG = { TX, RX, caps: { gzip: HAS_GZIP, gunzip: HAS_GUNZIP } };

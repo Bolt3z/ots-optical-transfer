@@ -17,12 +17,27 @@ interfaccia. Aprilo e funziona, anche con il Wi-Fi staccato.
 2. Apri la stessa pagina sul telefono → scheda **Ricevi** → *Usa la camera*.
 3. Inquadra lo schermo da 30–50 cm. Al 100% scarica il file.
 
-Luminosità dello schermo al massimo. Se la lettura è incerta, abbassa la versione QR o gli
-fps: un codice più piccolo e più lento passa dove uno denso non ce la fa.
+Luminosità dello schermo al massimo. **Parti da un file piccolo**, non da un video: un file
+da 2 MB richiede diversi minuti.
+
+La manopola della velocità è **«Byte per simbolo»**; la versione QR lasciala su `automatica`,
+che sceglie sempre il codice più piccolo capace di contenere il frame, cioè il più facile da
+leggere.
+
+| Byte per simbolo | QR | Velocità utile @12 fps |
+|---|---|---|
+| 256 | v11 · 61×61 | ~2,4 kB/s — luce difficile, più distanza |
+| 600 | v17 · 85×85 | ~5,6 kB/s — buon punto di partenza |
+| 1200 | v25 · 117×117 | ~11,2 kB/s — serve fuoco buono e stare vicino |
 
 Il ricevitore dice cosa non va invece di restare muto: distingue «non vedo nessun codice» da
 «leggo sempre lo stesso, il trasmettitore è fermo», e mostra quale motore di decodifica sta
-usando e quanti ms costa ogni tentativo.
+usando, quanti ms costa ogni tentativo e quanti simboli ha raccolto sul totale.
+
+**La percentuale conta i simboli raccolti, non i byte ricostruiti.** In un codice fontana
+non si ricostruisce quasi nulla finché non si è vicini al totale, e poi si completa di colpo:
+con un file grande, un indicatore basato sulla ricostruzione resterebbe a 0,0% per quasi
+tutto il trasferimento.
 
 ## Su iPhone
 
@@ -88,6 +103,13 @@ Nel ricevitore la decodifica QR costa circa 40 ms per frame a 800×600 e la lett
 thread principale si limita a leggere i pixel, mentre
 [`requestVideoFrameCallback`](https://developer.mozilla.org/docs/Web/API/HTMLVideoElement/requestVideoFrameCallback)
 fa in modo che ogni frame si decodifichi una volta sola invece di tre.
+
+Resta il limite più grosso, e vale dirlo chiaramente: l'app Fotocamera dell'iPhone legge un QR
+istantaneamente perché usa un rilevatore accelerato in hardware, e **Safari non lo espone alle
+pagine web** — non esiste `BarcodeDetector` su iOS. Una pagina web su iPhone non può usare
+quel motore. La strada per recuperare è `zxing-wasm` (§1 di `SPEC.md`), oppure il percorso «da
+un video registrato», che usa l'ottica di Apple per riprendere e poi decodifica senza vincoli
+di tempo reale.
 
 ## Sviluppo
 

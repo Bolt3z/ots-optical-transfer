@@ -80,6 +80,8 @@ button.ghost{width:100%;background:none;color:var(--dim);border:1px solid var(--
   color:var(--dim);margin:0 0 3px}
 .readout dd{font-family:var(--mono);font-size:14px;margin:0;color:var(--ink)}
 .readout dd.big{font-size:22px;color:var(--amber)}
+.readout dd{overflow-wrap:anywhere}
+.readout #rx-size{color:var(--dim)}
 
 .note{font-size:12.5px;color:var(--dim);line-height:1.55;margin:14px 0 0}
 .note strong{color:var(--ink);font-weight:600}
@@ -114,11 +116,15 @@ a.dl{display:block;text-align:center;background:var(--phos);color:#0C1A13;text-d
       <p class="note" id="tx-filename" style="margin:-8px 0 14px">Nessun file scelto</p>
       <div class="row">
         <label class="field"><span>Versione QR</span>
+          <!-- automatica sceglie la versione piu' piccola che contiene il frame,
+               che e' sempre la piu' facile da leggere a parita' di dati. Fissare
+               v25 con 600 byte per simbolo dava il codice piu' difficile alla
+               velocita' di uno facile: meta' capacita' buttata. -->
           <select id="tx-version">
-            <option value="0">automatica</option>
+            <option value="0" selected>automatica · consigliata</option>
             <option value="15">15 · piccola</option>
             <option value="20">20</option>
-            <option value="25" selected>25 · consigliata</option>
+            <option value="25">25</option>
             <option value="30">30 · densa</option>
           </select></label>
         <label class="field"><span>Frame al secondo</span>
@@ -130,10 +136,13 @@ a.dl{display:block;text-align:center;background:var(--phos);color:#0C1A13;text-d
           </select></label>
       </div>
       <label class="field"><span>Byte per simbolo</span>
+        <!-- E' questa la manopola della velocita': la versione QR e' una
+             conseguenza. I byte per simbolo determinano la dimensione del frame
+             e quindi la versione minima che lo contiene. -->
         <select id="tx-symsize">
-          <option value="256">256 · piu' robusto</option>
-          <option value="600" selected>600 · equilibrato</option>
-          <option value="1200">1200 · piu' veloce</option>
+          <option value="256">256 · robusto, QR v11</option>
+          <option value="600" selected>600 · equilibrato, QR v17</option>
+          <option value="1200">1200 · veloce, QR v25</option>
         </select></label>
       <label class="check"><input type="checkbox" id="tx-compress" checked> Comprimi prima di inviare</label>
       <p class="note" id="tx-compress-note" hidden style="margin:-10px 0 14px">Questo browser
@@ -177,8 +186,8 @@ a.dl{display:block;text-align:center;background:var(--phos);color:#0C1A13;text-d
     <dl class="readout">
       <div><dt>Completato</dt><dd class="big" id="rx-pct">0%</dd></div>
       <div><dt>Blocchi</dt><dd id="rx-blocks">—</dd></div>
-      <div><dt>File</dt><dd id="rx-name">—</dd></div>
-      <div><dt>Dimensione</dt><dd id="rx-size">—</dd></div>
+      <div><dt>Simboli</dt><dd id="rx-symbols">—</dd></div>
+      <div><dt>File</dt><dd><span id="rx-name">—</span> <span id="rx-size"></span></dd></div>
       <div><dt>Frame</dt><dd id="rx-frames">0 letti · 0 scartati</dd></div>
       <div><dt>Tempo residuo</dt><dd id="rx-eta">—</dd></div>
       <div><dt>Decodifica</dt><dd id="rx-engine">—</dd></div>

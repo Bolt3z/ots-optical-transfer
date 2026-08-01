@@ -200,8 +200,8 @@ function makeMp4() {
 }
 
 // ================================================== fase 2 e 3: il ricevitore, davvero
-async function phaseReceive(mode, { noWorker = false } = {}) {
-  const label = `${mode}${noWorker ? ' (senza worker)' : ''}`;
+async function phaseReceive(mode, { noWorker = false, rvfcStall = false } = {}) {
+  const label = `${mode}${noWorker ? ' (senza worker)' : ''}${rvfcStall ? ' (rvfc che si blocca)' : ''}`;
   console.log(`\n[${mode === 'cam' ? 2 : 3}] ricevitore — ${label}`);
   const extra = mode === 'cam'
     ? ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream',
@@ -213,11 +213,30 @@ async function phaseReceive(mode, { noWorker = false } = {}) {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
 
-  const dl = path.join(tmp, 'dl-' + mode + (noWorker ? '-main' : ''));
+  // Una cartella per variante, e svuotata: condividendola, il file della prova
+  // precedente veniva contato come un secondo download.
+  const dl = path.join(tmp, ['dl', mode, noWorker && 'main', rvfcStall && 'stall']
+    .filter(Boolean).join('-'));
+  fs.rmSync(dl, { recursive: true, force: true });
   fs.mkdirSync(dl, { recursive: true });
   const cdp = await page.target().createCDPSession();
   await cdp.send('Browser.setDownloadBehavior',
     { behavior: 'allowAndName', downloadPath: dl, eventsEnabled: true });
+
+  // Riproduce il guasto visto su iPhone: requestVideoFrameCallback scatta
+  // qualche volta e poi tace per sempre. Senza il cane da guardia il ciclo di
+  // scansione si fermerebbe in silenzio e si vedrebbe solo «nessun codice
+  // leggibile». Va installato prima degli script della pagina.
+  if (rvfcStall) {
+    await page.evaluateOnNewDocument(() => {
+      const orig = HTMLVideoElement.prototype.requestVideoFrameCallback;
+      let fired = 0;
+      HTMLVideoElement.prototype.requestVideoFrameCallback = function (cb) {
+        if (fired++ < 3) return orig.call(this, cb);
+        return 1;                       // accettato, mai chiamato
+      };
+    });
+  }
 
   await page.goto('file://' + HTML, { waitUntil: 'load' });
   if (noWorker) await page.evaluate(() => { window.OTS_NO_WORKER = true; });
@@ -228,16 +247,23 @@ async function phaseReceive(mode, { noWorker = false } = {}) {
 
   const t0 = Date.now();
   let done = false, err = '', last = null;
+  let sawPartial = false, symbolsMoved = false;
   while (Date.now() - t0 < 120000) {
     await new Promise((r) => setTimeout(r, 1000));
     last = await page.evaluate(() => ({
       err: document.getElementById('rx-error').hidden ? '' : document.getElementById('rx-error').textContent,
       pct: document.getElementById('rx-pct').textContent,
+      symbols: document.getElementById('rx-symbols').textContent,
       engine: document.getElementById('rx-engine').textContent,
       session: document.getElementById('rx-session').textContent,
       out: !document.getElementById('rx-out').hidden,
       verdict: document.getElementById('rx-verdict').textContent,
     }));
+    // La percentuale deve muoversi PRIMA della fine: era il difetto per cui
+    // restava a 0,0% per quasi tutto il trasferimento.
+    const p = parseFloat(last.pct);
+    if (!last.out && p > 0 && p < 100) sawPartial = true;
+    if (/^[1-9]/.test(last.symbols)) symbolsMoved = true;
     if (last.err) { err = last.err; break; }
     if (last.out) { done = true; break; }
   }
@@ -252,6 +278,15 @@ async function phaseReceive(mode, { noWorker = false } = {}) {
   ok(last.verdict === 'Integrità verificata', `digest verificato (${last.verdict})`);
   ok(noWorker ? last.engine.startsWith('main') : last.engine.startsWith('worker'),
     `motore atteso: ${noWorker ? 'main' : 'worker'}`);
+  ok(sawPartial, 'la percentuale si muove prima della fine');
+  ok(symbolsMoved, 'il campo Simboli conta i simboli raccolti');
+  // Il blocco di fuoco/esposizione non deve attivarsi da solo: e' quello che
+  // rompeva la ricezione su iPhone.
+  ok(!/fisso/.test(last.engine), 'il blocco della camera resta disattivato');
+  if (rvfcStall) {
+    ok(/\braf\b/.test(last.engine),
+      `ripiegato su requestAnimationFrame (${last.engine})`);
+  }
 
   await page.click('#rx-download');
   await new Promise((r) => setTimeout(r, 1500));
@@ -275,6 +310,7 @@ try {
     writeY4M(frames);
     await phaseReceive('cam');
     await phaseReceive('cam', { noWorker: true });
+    await phaseReceive('cam', { rvfcStall: true });
     if (makeMp4()) await phaseReceive('video');
     else console.log('\n[3] ricevitore da video registrato — saltato (ffmpeg assente)');
   }

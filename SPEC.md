@@ -144,8 +144,22 @@ lati deve mai tenere il file completo in memoria.
 - ✅ `requestVideoFrameCallback` dove c'è: un frame, un tentativo. Prima, con
   `requestAnimationFrame`, lo stesso frame si decodificava due o tre volte — 106 tentativi
   invece di 44 per lo stesso file.
-- ✅ `applyConstraints` per bloccare fuoco, esposizione e bilanciamento del bianco dopo il
-  primo aggancio, solo per ciò che il dispositivo dichiara. **Da confermare su un telefono.**
+- ⚠️ `applyConstraints` per bloccare fuoco ed esposizione: scritto, **disattivato per
+  default**. Su iPhone il blocco scatta esattamente quando arriva il primo manifest, e se il
+  dispositivo fissa il fuoco nel momento sbagliato da lì in poi ogni frame è sfocato — il
+  sintomo osservato è «legge qualche frame, poi nessun codice leggibile». Un'ottimizzazione
+  non verificata non deve poter rompere il caso base: si abilita con
+  `window.OTS_LOCK_CAMERA = true`.
+- ✅ Cane da guardia su `requestVideoFrameCallback`: se le callback non arrivano entro 1,2 s
+  si passa a `requestAnimationFrame` e non si torna indietro. Alcuni Safari smettono di
+  chiamarla su uno stream della camera, e il ciclo di scansione si fermava in silenzio.
+  `test/browser.test.mjs` riproduce il guasto (callback che scatta tre volte e poi tace).
+- ✅ La percentuale misura i **simboli raccolti**, non la frazione risolta dal peeling: con
+  K = 4000 solo lo 0,4% dei simboli ha grado 1, quindi l'indicatore restava a 0,0% per quasi
+  tutto il trasferimento e l'app sembrava rotta. C'è anche un campo con i conteggi veri.
+- ✅ Versione QR predefinita su `automatica`. Il default precedente (v25 con 600 byte per
+  simbolo) produceva 930 caratteri in un codice che ne contiene 1853: il QR più difficile da
+  leggere alla velocità di uno facile.
 - ✅ Piano sistematico per K ≤ 64: overhead 1.000× invece di 1.6–1.9×.
 - ✅ `unpackManifest`: limiti su `compressedLens`, `sbRawSize`, lunghezza del buffer, e
   controlli **prima** di allocare.
@@ -154,10 +168,16 @@ lati deve mai tenere il file completo in memoria.
   source block e vale per tutti, perché il formato ha un solo bit di flag.
 
 ### P1 — Quel che resta del ricevitore
-1. Provare su hardware vero: Android Chrome, Safari su iPhone via HTTPS, e verificare che
-   `applyConstraints` faccia davvero qualcosa.
-2. Valutare `zxing-wasm` al posto di jsQR: è più robusto sui codici densi, ed essendo il
-   collo di bottiglia (40 ms su 42) è lì che si guadagna.
+1. **Sostituire jsQR con `zxing-wasm`.** È il collo di bottiglia: 39,7 ms su 42 a 800×600.
+   Su iPhone il confronto è brutale — l'app Fotocamera usa un rilevatore accelerato in
+   hardware, e Safari **non lo espone alle pagine web** (niente `BarcodeDetector`, che invece
+   Chrome su Android ha). WebAssembly è l'unico modo di recuperare terreno: tipicamente 2–5×,
+   e più robusto sui codici densi. Attenzione all'aspettativa: il tempo di trasferimento è
+   governato da `byte per frame × fps`, quindi un decoder più veloce serve a non perdere
+   frame e a poter alzare densità e fps, non a moltiplicare la banda.
+2. Usare `BarcodeDetector` dove esiste (Android Chrome): motore nativo, a costo zero.
+3. Provare su hardware vero: Android Chrome, e verificare se `applyConstraints` su qualche
+   dispositivo blocchi fuoco ed esposizione senza rompere la messa a fuoco (vedi §1).
 
 ### P2 — File grandi
 3. **Il ricevitore tiene tutti i blocchi in RAM.** Oltre ~100 MB il tab muore. Passare alla
